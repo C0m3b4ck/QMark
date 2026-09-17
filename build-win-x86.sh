@@ -11,13 +11,15 @@
 #    Qt 6     — Built from source with -static for mingw32
 #    SQLite3  — Amalgamation compiled with mingw32-gcc
 #    libsodium — ./configure --host=i686-w64-mingw32 --disable-shared --enable-static
-#    SQLiteCpp — Built from vendored source
+#    SQLiteCpp — Built from vendored source (auto-built by this script)
 #
-#  Set environment variables to override default paths:
-#    QT_DIR       — Qt6 static install prefix (default: /opt/qt6-win32)
-#    SQLITE3_DIR  — SQLite3 amalgamation dir (default: /opt/sqlite3)
-#    SODIUM_DIR   — libsodium install prefix (default: /opt/libsodium-win32)
-#    SQLITECPP_DIR — SQLiteCpp source dir (default: $SCRIPT_DIR/sqlitecpp)
+#  Dependency search order (first match wins):
+#    1. Environment variables: QT_DIR, SQLITE3_DIR, SODIUM_DIR
+#    2. Project-local: ./deps/qt6-win32, ./deps/sqlite3, ./deps/libsodium-win32
+#    3. User home: ~/qt6-win32, ~/sqlite3, ~/libsodium-win32
+#    4. System: /opt/qt6-win32, /opt/sqlite3, /opt/libsodium-win32
+#
+#  To build dependencies first:  ./build-deps.sh win-x86
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -27,37 +29,33 @@ BUILD_DIR="$SCRIPT_DIR/build-win-x86"
 OUTPUT="$SCRIPT_DIR/QMark-x86.exe"
 
 # ── Toolchain ─────────────────────────────────────────────────────
-CXX=i686-w64-mingw32-g++
-CC=i686-w64-mingw32-gcc
-AR=i686-w64-mingw32-ar
+CXX="${CXX:-i686-w64-mingw32-g++}"
+CC="${CC:-i686-w64-mingw32-gcc}"
+AR="${AR:-i686-w64-mingw32-ar}"
 
-# ── Dependency paths (override via environment) ───────────────────
+# ── Path detection ────────────────────────────────────────────────
 find_dir() {
-    local desc="$1"; shift
     for d in "$@"; do
-        if [ -d "$d" ]; then echo "$d"; return; fi
+        [ -d "$d" ] && echo "$d" && return
     done
-    echo ""
 }
 
-QT_DIR="${QT_DIR:-$(find_dir "Qt6 static" \
-    /opt/qt6-win32 \
-    "$HOME/qmark-build/qt-static-win32" \
-    /home/sb3x/qmark-build/qt-static-win32 \
-    /tmp/qt6-win32)}"
-SQLITE3_DIR="${SQLITE3_DIR:-$(find_dir "SQLite3" \
-    /opt/sqlite3 \
-    "$HOME/qmark-build" \
-    /home/sb3x/qmark-build \
-    /tmp/sqlite3)}"
-SODIUM_DIR="${SODIUM_DIR:-$(find_dir "libsodium" \
-    /opt/libsodium-win32 \
-    "$HOME/qmark-build/sodium-win32" \
-    /home/sb3x/qmark-build/sodium-win32 \
-    /tmp/libsodium-win32)}"
-SQLITECPP_DIR="${SQLITECPP_DIR:-$(find_dir "SQLiteCpp" \
-    "$SCRIPT_DIR/sqlitecpp" \
-    "$SCRIPT_DIR")}"
+QT_DIR="${QT_DIR:-$(find_dir \
+    "$SCRIPT_DIR/deps/qt6-win32" \
+    "$HOME/qt6-win32" \
+    "$HOME/deps/qt6-win32" \
+    /opt/qt6-win32)}"
+SQLITE3_DIR="${SQLITE3_DIR:-$(find_dir \
+    "$SCRIPT_DIR/deps/sqlite3" \
+    "$HOME/sqlite3" \
+    "$HOME/deps/sqlite3" \
+    /opt/sqlite3)}"
+SODIUM_DIR="${SODIUM_DIR:-$(find_dir \
+    "$SCRIPT_DIR/deps/libsodium-win32" \
+    "$HOME/libsodium-win32" \
+    "$HOME/deps/libsodium-win32" \
+    /opt/libsodium-win32)}"
+SQLITECPP_DIR="${SQLITECPP_DIR:-$SCRIPT_DIR/sqlitecpp}"
 
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
@@ -78,43 +76,63 @@ check_tool() {
 check_tool "$CXX" "Install: sudo apt install mingw-w64"
 check_tool "$CC" "Install: sudo apt install mingw-w64"
 
-check_dir() {
-    if [ ! -d "$1" ]; then
-        echo "ERROR: $2 not found at $1" >&2
-        echo "  Set ${3} environment variable to the correct path." >&2
-        exit 1
-    fi
-}
+missing=0
+if [ -z "$QT_DIR" ]; then
+    echo "ERROR: Qt6 static libraries not found." >&2
+    echo "  Set QT_DIR to your Qt6 static install prefix." >&2
+    echo "  Or place files in ./deps/qt6-win32/" >&2
+    missing=1
+fi
+if [ -z "$SQLITE3_DIR" ] || [ ! -f "$SQLITE3_DIR/sqlite3.c" ]; then
+    echo "ERROR: SQLite3 amalgamation not found." >&2
+    echo "  Set SQLITE3_DIR to the directory containing sqlite3.c." >&2
+    echo "  Or place files in ./deps/sqlite3/" >&2
+    missing=1
+fi
+if [ -z "$SODIUM_DIR" ]; then
+    echo "ERROR: libsodium not found." >&2
+    echo "  Set SODIUM_DIR to your libsodium install prefix." >&2
+    echo "  Or place files in ./deps/libsodium-win32/" >&2
+    missing=1
+fi
+if [ ! -d "$SQLITECPP_DIR/include" ]; then
+    echo "ERROR: SQLiteCpp not found at $SQLITECPP_DIR" >&2
+    missing=1
+fi
+[ "$missing" -eq 1 ] && exit 1
 
-check_dir "$QT_DIR/lib" "Qt6 static libraries" "QT_DIR"
-check_dir "$SQLITE3_DIR" "SQLite3 amalgamation" "SQLITE3_DIR"
-check_dir "$SODIUM_DIR" "libsodium" "SODIUM_DIR"
-check_dir "$SQLITECPP_DIR/include" "SQLiteCpp headers" "SQLITECPP_DIR"
+echo "  QT_DIR:      $QT_DIR"
+echo "  SQLITE3_DIR: $SQLITE3_DIR"
+echo "  SODIUM_DIR:  $SODIUM_DIR"
 
 if [ ! -f "$QT_DIR/plugins/platforms/libqwindows.a" ]; then
-    echo "ERROR: Qt Windows platform plugin not found at $QT_DIR/plugins/platforms/libqwindows.a" >&2
-    echo "  Build Qt with -static to generate static plugins." >&2
+    echo "ERROR: Qt Windows platform plugin not found at $QT_DIR/plugins/platforms/" >&2
     exit 1
 fi
 
-# Find moc
-MOC_PATH="${QT_HOST_DIR:-/opt/qt6-host}/libexec/moc"
-if [ ! -x "$MOC_PATH" ]; then
-    for candidate in \
-        "$HOME/qmark-build/qt-host-tools/libexec/moc" \
-        /home/sb3x/qmark-build/qt-host-tools/libexec/moc \
-        /opt/qt6-host/libexec/moc \
-        "$QT_DIR/../qt-host-tools/libexec/moc"; do
-        if [ -x "$candidate" ]; then
-            MOC_PATH="$candidate"
-            break
-        fi
+find_moc() {
+    for d in \
+        "${QT_HOST_DIR:-}" \
+        "$SCRIPT_DIR/deps/qt6-host/bin" \
+        "$SCRIPT_DIR/deps/qt6-host/libexec" \
+        "$HOME/qt6-host/libexec" \
+        "$HOME/deps/qt6-host/libexec" \
+        /opt/qt6-host/libexec \
+        "$QT_DIR/../qt6-host/libexec" \
+        "$QT_DIR/../qt-host-tools/libexec"; do
+        [ -z "$d" ] && continue
+        for f in "$d/moc" "$d/qt6/moc"; do
+            [ -x "$f" ] && echo "$f" && return
+        done
     done
-fi
-if [ ! -x "$MOC_PATH" ]; then
+}
+
+MOC_PATH="$(find_moc)"
+if [ -z "$MOC_PATH" ]; then
     echo "ERROR: moc not found. Set QT_HOST_DIR to Qt host tools prefix." >&2
     exit 1
 fi
+echo "  MOC:         $MOC_PATH"
 
 # ── Prepare build directory ───────────────────────────────────────
 echo "[2/6] Preparing build directory..."
@@ -135,18 +153,15 @@ CXXFLAGS="-std=c++17 -O2 -Wall -m32 -DWIN32 -DUNICODE -D_UNICODE -DMINGW_HAS_SEC
 
 # ── Build SQLiteCpp static library ────────────────────────────────
 echo "[3/6] Building SQLiteCpp static library..."
-SQLITECPP_SRCS=(
-    $SQLITECPP_DIR/src/Database.cpp
-    $SQLITECPP_DIR/src/Statement.cpp
-    $SQLITECPP_DIR/src/VirtualDB.cpp
-    $SQLITECPP_DIR/src/VirtualTable.cpp
-    $SQLITECPP_DIR/src/Column.cpp
-    $SQLITECPP_DIR/src/Exception.cpp
-    $SQLITECPP_DIR/src/Transaction.cpp
-)
+SQLITECPP_SRCS=$(find "$SQLITECPP_DIR/src" -name '*.cpp' -not -name '*test*' -not -name '*example*' | sort)
+
+if [ -z "$SQLITECPP_SRCS" ]; then
+    echo "ERROR: No SQLiteCpp source files found in $SQLITECPP_DIR/src/" >&2
+    exit 1
+fi
 
 SQLITECPP_OBJS=""
-for src in "${SQLITECPP_SRCS[@]}"; do
+for src in $SQLITECPP_SRCS; do
     obj="$BUILD_DIR/obj/$(basename "${src%.cpp}.o")"
     $CXX $CXXFLAGS -c "$src" -o "$obj" 2>&1 | head -3
     SQLITECPP_OBJS="$SQLITECPP_OBJS $obj"
