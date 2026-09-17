@@ -341,11 +341,39 @@ QMAKE_LFLAGS += -static -static-libgcc -static-libstdc++
 | Library | Static File | Notes |
 |---|---|---|
 | Qt 6 | `libQt6*.a` | Must build Qt from source with `-static` |
+| Qt Windows Platform Plugin | `plugins/platforms/libqwindows.a` | **Required on Windows** — links the QPA backend |
+| Qt SQLite Driver Plugin | `plugins/sqldrivers/libqsqlite.a` | Required for Qt SQL |
+| Qt Image Format Plugins | `plugins/imageformats/libqgif.a`, etc. | Optional: gif, ico, jpeg, svg, tiff, webp |
+| Qt SVG Icon Engine | `plugins/iconengines/libqsvgicon.a` | Required for SVG icons |
+| Qt Modern Windows Style | `plugins/styles/libqmodernwindowsstyle.a` | Optional: native Windows look |
 | SQLite3 | `libsqlite3.a` | Build from amalgamation |
 | SQLiteCpp | `libSQLiteCpp.a` | Build from vendored source |
 | libsodium | `libsodium.a` | Build with `--disable-shared --enable-static` |
 | libgcc | (built-in) | Use `-static-libgcc` |
 | libstdc++ | (built-in) | Use `-static-libstdc++` |
+
+### Static Plugin Linking (Windows)
+
+Static Qt requires plugins to be explicitly imported. `main.cpp` includes:
+
+```cpp
+#include <QtPlugin>
+#ifdef QT_STATICPLUGIN
+Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)   // Windows platform backend
+Q_IMPORT_PLUGIN(QSQLiteDriverPlugin)         // SQLite SQL driver
+Q_IMPORT_PLUGIN(QGifPlugin)                  // GIF image format
+Q_IMPORT_PLUGIN(QICOPlugin)                  // ICO image format
+Q_IMPORT_PLUGIN(QJpegPlugin)                 // JPEG image format
+Q_IMPORT_PLUGIN(QSvgPlugin)                  // SVG rendering
+Q_IMPORT_PLUGIN(QSvgIconPlugin)              // SVG icon engine
+Q_IMPORT_PLUGIN(QModernWindowsStylePlugin)   // Windows style
+#endif
+```
+
+Compile with `-DQT_STATICPLUGIN` and link against the corresponding `.a` files from `plugins/`. Use `-Wl,--start-group` and `-Wl,--end-group` around all Qt and plugin libraries to resolve circular dependencies.
+
+Additional Windows SDK import libraries needed by the Qt platform plugin:
+`-ld3d11 -ld3d12 -ldxgi -ldwrite -lsetupapi -ld3d9 -lshcore -lwtsapi32 -lauthz -lmincore -lntdll -lnetapi32 -luserenv -ldbghelp`
 
 ---
 
