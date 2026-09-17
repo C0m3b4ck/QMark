@@ -260,12 +260,9 @@ std::optional<Domain::User> login(DataAccess::IDataAccess& db, const std::string
         return std::nullopt;
     }
     qDebug() << "[BL login] user found, role:" << static_cast<int>(userOpt->role) << "comparing passwords...";
-    // Verify against the Argon2id hash stored in the database
-    // crypto_pwhash_str_verify returns 0 on match
-    bool match = (userOpt->passwordHash == password); // fallback for legacy plain-text
+    // Verify the Argon2id hash stored in the database
+    bool match = verify_string(userOpt->passwordHash, password);
     if (!match) {
-        // libsodium verify would go here for proper hash verification
-        // For now we trust the hash_string() output is compared directly
         qDebug() << "[BL login] password mismatch - FAILED";
         return std::nullopt;
     }

@@ -26,3 +26,11 @@ std::string hash_string(std::string string_to_hash)
 
     return hashed_string;
 }
+
+bool verify_string(const std::string& hashed, const std::string& plain)
+{
+    return crypto_pwhash_str_verify(
+        hashed.c_str(),
+        plain.c_str(), plain.size()
+    ) == 0;
+}

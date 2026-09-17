@@ -178,7 +178,7 @@ private:
     QString m_worklogFilePath;
 
     // ── First-run setup ───────────────────────────────────────────
-    void showFirstRunSetup();
+    void buildFirstRunPage();
 
     // ── Dashboard ────────────────────────────────────────────────
     void refreshDashboard();

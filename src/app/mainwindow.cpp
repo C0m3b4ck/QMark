@@ -13,6 +13,11 @@
 #include <QScrollBar>
 #include <QGridLayout>
 #include <QScrollArea>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QLabel>
 #include <unordered_map>
 #include <QFrame>
 #include <QVBoxLayout>
@@ -65,8 +70,11 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
         ui->stackedWidget->setCurrentIndex(0); // login page
     }
 
-    // ── First-run: create initial SuperAdmin if no users exist ──
-    showFirstRunSetup();
+    // ── First-run: if no users exist, show setup form ─────────
+    if (m_db.getAllUsers().empty()) {
+        buildFirstRunPage();
+        ui->stackedWidget->setCurrentIndex(17); // first-run page
+    }
 }
 
 MainWindow::~MainWindow()
@@ -74,71 +82,156 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-// ── First-run Setup ─────────────────────────────────────────────
-// If no users exist in the database, prompt to create the first SuperAdmin.
-// This allows initial setup without manual SQLite commands.
-void MainWindow::showFirstRunSetup()
+// ── First-run Setup (Form Page) ──────────────────────────────────
+// Builds the first-run setup page programmatically and inserts it
+// into the stacked widget at index 17. Shows on startup when no
+// users exist in the database.
+void MainWindow::buildFirstRunPage()
 {
-    // Check if any users already exist
-    auto users = m_db.getAllUsers();
-    if (!users.empty()) return; // users exist, nothing to do
+    QWidget* page = new QWidget();
+    QVBoxLayout* mainLayout = new QVBoxLayout(page);
+    mainLayout->setSpacing(0);
 
-    // First-run: guide the user through creating a SuperAdmin
-    for (;;) {
-        QMessageBox info(this);
-        info.setWindowTitle("First-Time Setup");
-        info.setIcon(QMessageBox::Information);
-        info.setText("Welcome to QMark!\n\n"
-                     "No user accounts were found.\n"
-                     "You need to create a SuperAdmin account to get started.");
-        info.setInformativeText("Click OK to create your first SuperAdmin account.");
-        info.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
-        if (info.exec() != QMessageBox::Ok) {
-            // User cancelled — stay on login page, they can't do anything yet
+    // Top bar (matches login page style)
+    QFrame* topBar = new QFrame();
+    topBar->setMaximumHeight(60);
+    topBar->setStyleSheet("background: #0078d4;");
+    QHBoxLayout* topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(15, 0, 15, 0);
+    QLabel* title = new QLabel("QMark");
+    title->setStyleSheet("color: white; font-size: 16px; font-weight: bold;");
+    topLayout->addWidget(title);
+    topLayout->addStretch();
+    mainLayout->addWidget(topBar);
+
+    // Center the form
+    QVBoxLayout* centerWrapper = new QVBoxLayout();
+    centerWrapper->addStretch();
+
+    QHBoxLayout* centerRow = new QHBoxLayout();
+    centerRow->addStretch();
+
+    // Form frame
+    QFrame* frame = new QFrame();
+    frame->setMinimumWidth(400);
+    frame->setMaximumWidth(500);
+    frame->setFrameShape(QFrame::StyledPanel);
+    frame->setStyleSheet(
+        "QFrame { background: white; border: 1px solid #ddd; border-radius: 10px; }");
+    QVBoxLayout* formLayout = new QVBoxLayout(frame);
+    formLayout->setContentsMargins(30, 30, 30, 30);
+    formLayout->setSpacing(12);
+
+    // Title
+    QLabel* formTitle = new QLabel("Welcome to QMark");
+    formTitle->setAlignment(Qt::AlignCenter);
+    QFont f = formTitle->font();
+    f.setPointSize(20);
+    f.setBold(true);
+    formTitle->setFont(f);
+    formLayout->addWidget(formTitle);
+
+    QLabel* subtitle = new QLabel("No user accounts found.\nCreate a SuperAdmin account to get started.");
+    subtitle->setAlignment(Qt::AlignCenter);
+    subtitle->setStyleSheet("color: #666;");
+    formLayout->addWidget(subtitle);
+
+    formLayout->addSpacing(10);
+
+    // Username
+    QLineEdit* txtUser = new QLineEdit();
+    txtUser->setPlaceholderText("Username");
+    txtUser->setMinimumHeight(40);
+    QFont inputFont;
+    inputFont.setPointSize(13);
+    txtUser->setFont(inputFont);
+    formLayout->addWidget(txtUser);
+
+    // Password
+    QLineEdit* txtPass = new QLineEdit();
+    txtPass->setPlaceholderText("Password");
+    txtPass->setEchoMode(QLineEdit::Password);
+    txtPass->setMinimumHeight(40);
+    txtPass->setFont(inputFont);
+    formLayout->addWidget(txtPass);
+
+    // Confirm password
+    QLineEdit* txtPass2 = new QLineEdit();
+    txtPass2->setPlaceholderText("Confirm password");
+    txtPass2->setEchoMode(QLineEdit::Password);
+    txtPass2->setMinimumHeight(40);
+    txtPass2->setFont(inputFont);
+    formLayout->addWidget(txtPass2);
+
+    // Status label (hidden by default)
+    QLabel* statusLabel = new QLabel();
+    statusLabel->setAlignment(Qt::AlignCenter);
+    statusLabel->setStyleSheet("color: #c62828;");
+    statusLabel->hide();
+    formLayout->addWidget(statusLabel);
+
+    formLayout->addSpacing(5);
+
+    // Create Account button
+    QPushButton* btnCreate = new QPushButton("CREATE ACCOUNT");
+    btnCreate->setMinimumHeight(50);
+    QFont btnFont;
+    btnFont.setPointSize(14);
+    btnFont.setBold(true);
+    btnCreate->setFont(btnFont);
+    btnCreate->setStyleSheet(
+        "QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 8px; }"
+        "QPushButton:hover { background-color: #005a9e; }");
+    btnCreate->setCursor(Qt::PointingHandCursor);
+    formLayout->addWidget(btnCreate);
+
+    centerRow->addWidget(frame);
+    centerRow->addStretch();
+
+    centerWrapper->addLayout(centerRow);
+    centerWrapper->addStretch();
+    mainLayout->addLayout(centerWrapper);
+
+    // Insert page into stacked widget at index 17
+    ui->stackedWidget->insertWidget(17, page);
+
+    // Connect the button
+    connect(btnCreate, &QPushButton::clicked, this, [this, txtUser, txtPass, txtPass2, statusLabel]() {
+        QString username = txtUser->text().trimmed();
+        QString password1 = txtPass->text();
+        QString password2 = txtPass2->text();
+
+        // Validate
+        if (username.isEmpty() || password1.isEmpty() || password2.isEmpty()) {
+            statusLabel->setText("All fields are required.");
+            statusLabel->show();
             return;
         }
 
-        // Get username
-        bool ok = false;
-        QString username = QInputDialog::getText(this, "First-Time Setup",
-            "Choose a username for the SuperAdmin account:",
-            QLineEdit::Normal, QString(), &ok).trimmed();
-        if (!ok || username.isEmpty()) continue;
-
-        // Check for duplicates
-        if (m_db.getUserByUsername(username.toStdString()).has_value()) {
-            QMessageBox::warning(this, "First-Time Setup",
-                "A user with that username already exists. Please choose another.");
-            continue;
-        }
-
-        // Get password
-        QString password1 = QInputDialog::getText(this, "First-Time Setup",
-            "Choose a password:", QLineEdit::Password, QString(), &ok);
-        if (!ok || password1.isEmpty()) continue;
-
-        // Confirm password
-        QString password2 = QInputDialog::getText(this, "First-Time Setup",
-            "Confirm password:", QLineEdit::Password, QString(), &ok);
-        if (!ok) continue;
-
         if (password1 != password2) {
-            QMessageBox::warning(this, "First-Time Setup", "Passwords do not match. Try again.");
-            continue;
+            statusLabel->setText("Passwords do not match.");
+            statusLabel->show();
+            return;
         }
 
         if (password1.length() < 4) {
-            QMessageBox::warning(this, "First-Time Setup",
-                "Password must be at least 4 characters. Try again.");
-            continue;
+            statusLabel->setText("Password must be at least 4 characters.");
+            statusLabel->show();
+            return;
         }
 
-        // Hash the password and create the user
+        if (m_db.getUserByUsername(username.toStdString()).has_value()) {
+            statusLabel->setText("Username already exists.");
+            statusLabel->show();
+            return;
+        }
+
+        // Create the SuperAdmin
         std::string hashedPw = hash_string(password1.toStdString());
         if (hashedPw.empty()) {
-            QMessageBox::critical(this, "First-Time Setup",
-                "Failed to hash password. Please try again.");
-            continue;
+            statusLabel->setText("Failed to hash password. Try again.");
+            statusLabel->show();
+            return;
         }
 
         Domain::User admin;
@@ -150,16 +243,16 @@ void MainWindow::showFirstRunSetup()
         admin.createdAt = Domain::now();
 
         if (m_db.addUser(admin)) {
-            QMessageBox::information(this, "First-Time Setup",
-                "SuperAdmin account created successfully!\n\n"
-                "You can now log in with your new credentials.");
             LOG_INFO("First-run: SuperAdmin account created: " + username);
-            return; // Done — user can now log in
+            QMessageBox::information(this, "Setup Complete",
+                "SuperAdmin account created!\n\nYou can now log in.");
+            // Navigate to login page
+            ui->stackedWidget->setCurrentIndex(0);
         } else {
-            QMessageBox::critical(this, "First-Time Setup",
-                "Failed to create user. Please try again.");
+            statusLabel->setText("Failed to create user. Try again.");
+            statusLabel->show();
         }
-    }
+    });
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -735,7 +828,7 @@ void MainWindow::on_btnUndoSale_clicked()
     // Remove the sale record
     m_db.deleteSale(last.id);
 
-    LOG_INFO("Sale undone: " + itemName.toStdString() + " x" + std::to_string(last.quantitySold));
+    LOG_INFO("Sale undone: " + itemName + " x" + QString::number(last.quantitySold));
     QMessageBox::information(this, "Undo Sale", "Sale undone. Stock restored.");
     refreshDashboard();
 }
