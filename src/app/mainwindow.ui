@@ -1,0 +1,497 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>1280</width><height>800</height></rect>
+  </property>
+  <property name="minimumSize">
+   <size><width>800</width><height>600</height></size>
+  </property>
+  <property name="windowTitle"><string>QMark — School Shop PoS</string></property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayoutCentral">
+    <property name="spacing"><number>0</number></property>
+    <property name="margin"><number>0</number></property>
+    <item>
+     <widget class="QStackedWidget" name="stackedWidget">
+
+      <!-- Page 0: Login -->
+      <widget class="QWidget" name="pageLogin">
+       <layout class="QVBoxLayout" name="loginLayout">
+        <item><spacer name="loginSpacerTop"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+        <item>
+         <layout class="QHBoxLayout" name="loginCenter">
+          <item><spacer name="loginSpacerLeft"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+          <item>
+           <widget class="QFrame" name="loginFrame">
+            <property name="minimumSize"><size><width>400</width><height>0</height></size></property>
+            <property name="maximumSize"><size><width>500</width><height>16777215</height></size></property>
+            <property name="frameShape"><enum>QFrame::StyledPanel</enum></property>
+            <layout class="QVBoxLayout" name="loginFrameLayout">
+             <property name="topMargin"><number>30</number></property>
+             <property name="bottomMargin"><number>30</number></property>
+             <item><widget class="QLabel" name="lblLoginTitle"><property name="text"><string>QMark — School Shop</string></property><property name="alignment"><set>Qt::AlignCenter</set></property><property name="font"><font><pointsize>20</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+             <item><widget class="QLabel" name="lblLoginSubtitle"><property name="text"><string>Point of Sale System</string></property><property name="alignment"><set>Qt::AlignCenter</set></property><property name="styleSheet"><string notr="true">color: #666;</string></property></widget></item>
+             <item><spacer name="loginSpacer1"><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>10</height></size></property></spacer></item>
+             <item><widget class="QLineEdit" name="txtUsername_login"><property name="placeholderText"><string>Username</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+             <item><widget class="QLineEdit" name="txtPassword_login"><property name="placeholderText"><string>Password</string></property><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+             <item><layout class="QHBoxLayout" name="loginOptsLayout"><item><widget class="QCheckBox" name="chkHide_login"><property name="text"><string>Show password</string></property></widget></item></layout></item>
+             <item><widget class="QPushButton" name="btnLogin"><property name="text"><string>LOG IN</string></property><property name="minimumSize"><size><width>0</width><height>50</height></size></property><property name="font"><font><pointsize>14</pointsize><weight>75</weight><bold>true</bold></font></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 8px; } QPushButton:hover { background-color: #005a9e; }</string></property></widget></item>
+            </layout>
+           </widget>
+          </item>
+          <item><spacer name="loginSpacerRight"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+         </layout>
+        </item>
+        <item><spacer name="loginSpacerBottom"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+       </layout>
+      </widget>
+
+      <!-- Page 1: POS Grid (Main Dashboard) -->
+      <widget class="QWidget" name="pageMain">
+       <layout class="QVBoxLayout" name="mainLayout">
+        <property name="spacing"><number>0</number></property>
+        <item>
+         <widget class="QFrame" name="topBar">
+          <property name="maximumSize"><size><width>16777215</width><height>60</height></size></property>
+          <property name="frameShape"><enum>QFrame::StyledPanel</enum></property>
+          <property name="styleSheet"><string notr="true">background: #0078d4;</string></property>
+          <layout class="QHBoxLayout" name="topBarLayout">
+           <property name="leftMargin"><number>15</number></property>
+           <property name="rightMargin"><number>15</number></property>
+           <item><widget class="QLabel" name="lblAppTitle"><property name="text"><string>QMark — School Shop PoS</string></property><property name="styleSheet"><string notr="true">color: white; font-size: 16px; font-weight: bold;</string></property></widget></item>
+           <item><spacer name="topBarSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+           <item><widget class="QPushButton" name="btnSellNav"><property name="text"><string>SELL</string></property><property name="minimumSize"><size><width>120</width><height>40</height></size></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #2e7d32; color: white; font-size: 14px; font-weight: bold; border: none; border-radius: 6px; padding: 5px 15px; } QPushButton:hover { background-color: #1b5e20; }</string></property><property name="cursor"><enum>Qt::PointingHandCursor</enum></property></widget></item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="searchBar">
+          <property name="maximumSize"><size><width>16777215</width><height>50</height></size></property>
+          <layout class="QHBoxLayout" name="searchBarLayout">
+           <property name="leftMargin"><number>10</number></property>
+           <property name="rightMargin"><number>10</number></property>
+           <item><widget class="QLineEdit" name="txtSearch_sell"><property name="placeholderText"><string>Search items by name, category, shelf...</string></property><property name="minimumSize"><size><width>0</width><height>36</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+           <item><widget class="QPushButton" name="btnSearch_sell"><property name="text"><string>Search</string></property><property name="minimumSize"><size><width>100</width><height>36</height></size></property></widget></item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QScrollArea" name="scrollAreaItems">
+          <property name="widgetResizable"><bool>true</bool></property>
+          <property name="styleSheet"><string notr="true">background: #f0f0f0;</string></property>
+          <widget class="QWidget" name="scrollAreaWidgetContents">
+           <layout class="QGridLayout" name="gridLayoutItemScroll">
+            <property name="spacing"><number>10</number></property>
+            <property name="leftMargin"><number>10</number></property>
+            <property name="rightMargin"><number>10</number></property>
+            <property name="topMargin"><number>10</number></property>
+            <property name="bottomMargin"><number>10</number></property>
+           </layout>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 2: Add Item -->
+      <widget class="QWidget" name="pageAddItem">
+       <layout class="QVBoxLayout" name="addItemLayout">
+        <item><widget class="QLabel" name="lblAddItem"><property name="text"><string>Add New Item</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item><widget class="QLineEdit" name="txtName_item"><property name="placeholderText"><string>Item Name *</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="addItemIdLayout">
+          <item><widget class="QLineEdit" name="txtId_item"><property name="placeholderText"><string>ID (auto-generated if checked)</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+          <item><widget class="QCheckBox" name="chkAutogenerateID_item"><property name="text"><string>Auto-generate ID</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnCheckId_item"><property name="text"><string>Check ID</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnClear_id_item"><property name="text"><string>Clear</string></property></widget></item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="addQtyPriceLayout">
+          <item><widget class="QLineEdit" name="txtQuantity_item"><property name="placeholderText"><string>Quantity *</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+          <item><widget class="QLineEdit" name="txtPrice_item"><property name="placeholderText"><string>Price ($) *</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="addCatShelfLayout">
+          <item><widget class="QLineEdit" name="txtCategory_item"><property name="placeholderText"><string>Category</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+          <item><widget class="QLineEdit" name="txtShelf_item"><property name="placeholderText"><string>Shelf / Location</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+         </layout>
+        </item>
+        <item><widget class="QComboBox" name="cboStatus_item"><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property><item><property name="text"><string>In Stock</string></property></item><item><property name="text"><string>Low Stock</string></property></item><item><property name="text"><string>Out of Stock</string></property></item></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="addButtonsLayout">
+          <item><widget class="QPushButton" name="btnClear_name_item"><property name="text"><string>Clear Form</string></property><property name="minimumSize"><size><width>0</width><height>45</height></size></property></widget></item>
+          <item><spacer name="addItemSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+          <item><widget class="QPushButton" name="btnAdd_item"><property name="text"><string>ADD ITEM</string></property><property name="minimumSize"><size><width>160</width><height>50</height></size></property><property name="font"><font><pointsize>14</pointsize><weight>75</weight><bold>true</bold></font></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #2e7d32; color: white; border: none; border-radius: 8px; } QPushButton:hover { background-color: #1b5e20; }</string></property></widget></item>
+         </layout>
+        </item>
+        <item><spacer name="addItemBottomSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+       </layout>
+      </widget>
+
+      <!-- Page 3: Edit Item -->
+      <widget class="QWidget" name="pageEditItem">
+       <layout class="QVBoxLayout" name="editItemLayout">
+        <item><widget class="QLabel" name="lblEditItem"><property name="text"><string>Edit Item</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="editSearchLayout">
+          <item><widget class="QLineEdit" name="txtSearch_item_edit"><property name="placeholderText"><string>Search item to edit...</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+          <item><widget class="QComboBox" name="cboSearchField_item_edit"><property name="minimumSize"><size><width>120</width><height>36</height></size></property><item><property name="text"><string>All</string></property></item><item><property name="text"><string>Name</string></property></item><item><property name="text"><string>Category</string></property></item><item><property name="text"><string>Shelf</string></property></item><item><property name="text"><string>Status</string></property></item></widget></item>
+          <item><widget class="QPushButton" name="btnSearch_item_edit"><property name="text"><string>Search</string></property><property name="minimumSize"><size><width>100</width><height>36</height></size></property></widget></item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="editListAndFormLayout">
+          <item><widget class="QListWidget" name="lstSearch_item_edit"><property name="minimumSize"><size><width>350</width><height>0</height></size></property><property name="font"><font><pointsize>12</pointsize></font></property></widget></item>
+          <item>
+           <layout class="QVBoxLayout" name="editFormLayout">
+            <item><widget class="QLineEdit" name="txtId_item_edit"><property name="placeholderText"><string>ID</string></property><property name="enabled"><bool>false</bool></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item><widget class="QLineEdit" name="txtName_item_edit"><property name="placeholderText"><string>Item Name</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item>
+             <layout class="QHBoxLayout" name="editQtyPriceLayout">
+              <item><widget class="QLineEdit" name="txtQuantity_item_edit"><property name="placeholderText"><string>Quantity</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+              <item><widget class="QLineEdit" name="txtPrice_item_edit"><property name="placeholderText"><string>Price ($)</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+             </layout>
+            </item>
+            <item>
+             <layout class="QHBoxLayout" name="editCatShelfLayout">
+              <item><widget class="QLineEdit" name="txtCategory_item_edit"><property name="placeholderText"><string>Category</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+              <item><widget class="QLineEdit" name="txtShelf_item_edit"><property name="placeholderText"><string>Shelf</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+             </layout>
+            </item>
+            <item><widget class="QComboBox" name="cboStatus_item_edit"><property name="minimumSize"><size><width>0</width><height>40</height></size></property><item><property name="text"><string>In Stock</string></property></item><item><property name="text"><string>Low Stock</string></property></item><item><property name="text"><string>Out of Stock</string></property></item><item><property name="text"><string>Sold Out</string></property></item></widget></item>
+            <item>
+             <layout class="QHBoxLayout" name="editBtnLayout">
+              <item><widget class="QPushButton" name="btnClear_name_item_edit"><property name="text"><string>Clear</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnClear_id_item_edit"><property name="text"><string>Clear ID</string></property></widget></item>
+              <item><spacer name="editItemSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+              <item><widget class="QPushButton" name="btnEdit_item"><property name="text"><string>SAVE CHANGES</string></property><property name="minimumSize"><size><width>160</width><height>50</height></size></property><property name="font"><font><pointsize>13</pointsize><weight>75</weight><bold>true</bold></font></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 8px; } QPushButton:hover { background-color: #005a9e; }</string></property></widget></item>
+             </layout>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 4: Remove Item -->
+      <widget class="QWidget" name="pageRemoveItem">
+       <layout class="QVBoxLayout" name="removeItemLayout">
+        <item><widget class="QLabel" name="lblRemoveItem"><property name="text"><string>Remove Item</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="removeSearchLayout">
+          <item><widget class="QLineEdit" name="txtSearch_item_remove"><property name="placeholderText"><string>Search item to remove...</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+          <item><widget class="QPushButton" name="btnSearch_item_remove"><property name="text"><string>Search</string></property><property name="minimumSize"><size><width>100</width><height>36</height></size></property></widget></item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="removeListLayout">
+          <item><widget class="QListWidget" name="lstSearch_item_remove"><property name="minimumSize"><size><width>350</width><height>0</height></size></property><property name="font"><font><pointsize>12</pointsize></font></property></widget></item>
+          <item>
+           <layout class="QVBoxLayout" name="removeFormLayout">
+            <item><widget class="QLineEdit" name="txtId_item_remove"><property name="placeholderText"><string>ID</string></property><property name="enabled"><bool>false</bool></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item><widget class="QLineEdit" name="txtName_item_remove"><property name="placeholderText"><string>Name</string></property><property name="enabled"><bool>false</bool></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item><spacer name="removeSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+            <item>
+             <layout class="QHBoxLayout" name="removeBtnLayout">
+              <item><widget class="QPushButton" name="btnUndoRemove_item"><property name="text"><string>Undo Remove...</string></property><property name="minimumSize"><size><width>140</width><height>45</height></size></property></widget></item>
+              <item><widget class="QPushButton" name="btnUndoLast_item"><property name="text"><string>Undo Last</string></property><property name="minimumSize"><size><width>120</width><height>45</height></size></property></widget></item>
+              <item><widget class="QPushButton" name="btnRemove_item"><property name="text"><string>REMOVE</string></property><property name="minimumSize"><size><width>140</width><height>50</height></size></property><property name="font"><font><pointsize>14</pointsize><weight>75</weight><bold>true</bold></font></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #c62828; color: white; border: none; border-radius: 8px; } QPushButton:hover { background-color: #8e0000; }</string></property></widget></item>
+             </layout>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 5: Undo Removed -->
+      <widget class="QWidget" name="pageUndoRemoved">
+       <layout class="QVBoxLayout" name="undoRemovedLayout">
+        <item><widget class="QLabel" name="lblUndoRemoved"><property name="text"><string>Restore Removed Items</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item><widget class="QListWidget" name="lstSearch_undoremoved"><property name="font"><font><pointsize>12</pointsize></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="undoRemovedBtnLayout">
+          <item><widget class="QPushButton" name="btnUndoSelected_undoremoved"><property name="text"><string>Restore Selected</string></property><property name="minimumSize"><size><width>0</width><height>45</height></size></property></widget></item>
+          <item><widget class="QPushButton" name="btnUndoAll_undoremoved"><property name="text"><string>Restore All</string></property><property name="minimumSize"><size><width>0</width><height>45</height></size></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #f57f17; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 6: Sell (POS grid reused via code) -->
+      <widget class="QWidget" name="pageSellGrid">
+       <layout class="QVBoxLayout" name="sellGridLayout">
+        <item><widget class="QLabel" name="lblSellPage"><property name="text"><string>Shop Floor — Tap an item to sell</string></property><property name="font"><font><pointsize>16</pointsize><weight>75</weight><bold>true</bold></font></property><property name="alignment"><set>Qt::AlignCenter</set></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="sellSearchLayout">
+          <item><widget class="QLineEdit" name="txtSearch_sell_page"><property name="placeholderText"><string>Search items...</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+          <item><widget class="QPushButton" name="btnSearch_sell_page"><property name="text"><string>Search</string></property><property name="minimumSize"><size><width>100</width><height>36</height></size></property></widget></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 7: Categories -->
+      <widget class="QWidget" name="pageCategories">
+       <layout class="QVBoxLayout" name="categoryLayout">
+        <item><widget class="QLabel" name="lblCategories"><property name="text"><string>Manage Categories</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="catListAndFormLayout">
+          <item><widget class="QListWidget" name="lstSearch_category"><property name="minimumSize"><size><width>300</width><height>0</height></size></property><property name="font"><font><pointsize>12</pointsize></font></property></widget></item>
+          <item>
+           <layout class="QVBoxLayout" name="catFormLayout">
+            <item><widget class="QLineEdit" name="txtName_category"><property name="placeholderText"><string>Category Name</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item><widget class="QLineEdit" name="txtId_category"><property name="placeholderText"><string>ID</string></property><property name="enabled"><bool>false</bool></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item>
+             <layout class="QHBoxLayout" name="catBtnLayout">
+              <item><widget class="QPushButton" name="btnClear_name_category"><property name="text"><string>Clear</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnAdd_category"><property name="text"><string>Add</string></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #2e7d32; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnEdit_category"><property name="text"><string>Edit</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnRemove_category"><property name="text"><string>Remove</string></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #c62828; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+             </layout>
+            </item>
+            <item>
+             <layout class="QHBoxLayout" name="catUndoLayout">
+              <item><widget class="QPushButton" name="btnUndoAdd_category"><property name="text"><string>Undo Add</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnUndoEdit_category"><property name="text"><string>Undo Edit</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnUndoRemove_category"><property name="text"><string>Undo Remove</string></property></widget></item>
+             </layout>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 8: Shelves -->
+      <widget class="QWidget" name="pageShelves">
+       <layout class="QVBoxLayout" name="shelfLayout">
+        <item><widget class="QLabel" name="lblShelves"><property name="text"><string>Manage Shelves</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="shelfListAndFormLayout">
+          <item><widget class="QListWidget" name="lstSearch_shelf"><property name="minimumSize"><size><width>300</width><height>0</height></size></property><property name="font"><font><pointsize>12</pointsize></font></property></widget></item>
+          <item>
+           <layout class="QVBoxLayout" name="shelfFormLayout">
+            <item><widget class="QLineEdit" name="txtName_shelf"><property name="placeholderText"><string>Shelf Name</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item><widget class="QLineEdit" name="txtId_shelf"><property name="placeholderText"><string>ID</string></property><property name="enabled"><bool>false</bool></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+            <item>
+             <layout class="QHBoxLayout" name="shelfBtnLayout">
+              <item><widget class="QPushButton" name="btnClear_name_shelf"><property name="text"><string>Clear</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnAdd_shelf"><property name="text"><string>Add</string></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #2e7d32; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnEdit_shelf"><property name="text"><string>Edit</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnRemove_shelf"><property name="text"><string>Remove</string></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #c62828; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+             </layout>
+            </item>
+            <item>
+             <layout class="QHBoxLayout" name="shelfUndoLayout">
+              <item><widget class="QPushButton" name="btnUndoAdd_shelf"><property name="text"><string>Undo Add</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnUndoEdit_shelf"><property name="text"><string>Undo Edit</string></property></widget></item>
+              <item><widget class="QPushButton" name="btnUndoRemove_shelf"><property name="text"><string>Undo Remove</string></property></widget></item>
+             </layout>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 9: Sales History -->
+      <widget class="QWidget" name="pageSalesHistory">
+       <layout class="QVBoxLayout" name="salesHistoryLayout">
+        <item><widget class="QLabel" name="lblSalesHistory"><property name="text"><string>Sales History</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="salesSearchLayout">
+          <item><widget class="QLineEdit" name="txtSearch_sales"><property name="placeholderText"><string>Search sales...</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+          <item><widget class="QPushButton" name="btnSearch_sales"><property name="text"><string>Search</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnRefresh_sales"><property name="text"><string>Refresh</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnExport_sales"><property name="text"><string>Export CSV</string></property></widget></item>
+         </layout>
+        </item>
+        <item><widget class="QLabel" name="lblSalesTotal"><property name="text"><string>Total Revenue: $0.00</string></property><property name="font"><font><pointsize>14</pointsize><weight>75</weight><bold>true</bold></font></property><property name="styleSheet"><string notr="true">color: #2e7d32;</string></property></widget></item>
+        <item><widget class="QListWidget" name="lstSearch_sales"><property name="font"><font><pointsize>12</pointsize></font></property></widget></item>
+       </layout>
+      </widget>
+
+      <!-- Page 10: Reports -->
+      <widget class="QWidget" name="pageReports">
+       <layout class="QVBoxLayout" name="reportsLayout">
+        <item><widget class="QLabel" name="lblReports"><property name="text"><string>Sales Report</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="reportBtnLayout">
+          <item><widget class="QPushButton" name="btnGenerateReport"><property name="text"><string>Generate Report</string></property><property name="minimumSize"><size><width>160</width><height>45</height></size></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnExportReport"><property name="text"><string>Export Report</string></property><property name="minimumSize"><size><width>140</width><height>45</height></size></property></widget></item>
+         </layout>
+        </item>
+        <item><widget class="QTextEdit" name="txtReport"><property name="readOnly"><bool>true</bool></property><property name="font"><font><pointsize>12</pointsize><family>monospace</family></font></property></widget></item>
+       </layout>
+      </widget>
+
+      <!-- Page 11: Database -->
+      <widget class="QWidget" name="pageDatabase">
+       <layout class="QVBoxLayout" name="databaseLayout">
+        <item><widget class="QLabel" name="lblDatabase"><property name="text"><string>Database Configuration</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="dbItemsLayout">
+          <item><widget class="QLabel" name="lblItemsDbPath"><property name="text"><string>Items DB:</string></property><property name="minimumSize"><size><width>90</width><height>0</height></size></property></widget></item>
+          <item><widget class="QLineEdit" name="txtItemsDbPath"><property name="placeholderText"><string>Path to items.db</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+          <item><widget class="QPushButton" name="btnBrowseItemsDb"><property name="text"><string>Browse</string></property></widget></item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="dbUsersLayout">
+          <item><widget class="QLabel" name="lblUsersDbPath"><property name="text"><string>Users DB:</string></property><property name="minimumSize"><size><width>90</width><height>0</height></size></property></widget></item>
+          <item><widget class="QLineEdit" name="txtUsersDbPath"><property name="placeholderText"><string>Path to users.db</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property></widget></item>
+          <item><widget class="QPushButton" name="btnBrowseUsersDb"><property name="text"><string>Browse</string></property></widget></item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="dbBtnLayout">
+          <item><widget class="QPushButton" name="btnTestConnection"><property name="text"><string>Test Connection</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnLoadDbConfig"><property name="text"><string>Load &amp; Connect</string></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnCreateNewDb"><property name="text"><string>Create New DBs</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnSaveAsDefault"><property name="text"><string>Save as Default</string></property></widget></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 12: Accounts -->
+      <widget class="QWidget" name="pageAccounts">
+       <layout class="QVBoxLayout" name="accountsLayout">
+        <item><widget class="QLabel" name="lblAccounts"><property name="text"><string>Manage Accounts</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item><widget class="QListWidget" name="lstSearchAccount"><property name="font"><font><pointsize>12</pointsize></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="accountBtnLayout">
+          <item><widget class="QPushButton" name="btnSearchAccount"><property name="text"><string>Refresh</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnChangeRole"><property name="text"><string>Change Role</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnChangePassword"><property name="text"><string>Change Password</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnDeleteAccount"><property name="text"><string>Delete Account</string></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #c62828; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- Page 13: Preferences -->
+      <widget class="QWidget" name="pagePreferences">
+       <layout class="QVBoxLayout" name="preferencesLayout">
+        <item><widget class="QLabel" name="lblPreferences"><property name="text"><string>Preferences</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item><widget class="QCheckBox" name="chkWorklog"><property name="text"><string>Enable Worklog</string></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+        <item><widget class="QCheckBox" name="chkTelemetry"><property name="text"><string>Enable Telemetry</string></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="prefBtnLayout">
+          <item><widget class="QPushButton" name="btnSavePreferences"><property name="text"><string>Save Preferences</string></property><property name="minimumSize"><size><width>160</width><height>45</height></size></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 6px; }</string></property></widget></item>
+          <item><widget class="QPushButton" name="btnResetPreferences"><property name="text"><string>Reset to Defaults</string></property><property name="minimumSize"><size><width>160</width><height>45</height></size></property></widget></item>
+         </layout>
+        </item>
+        <item><spacer name="prefSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+       </layout>
+      </widget>
+
+      <!-- Page 14: Worklog -->
+      <widget class="QWidget" name="pageWorklog">
+       <layout class="QVBoxLayout" name="worklogLayout">
+        <item><widget class="QLabel" name="lblWorklog"><property name="text"><string>Worklog Statistics</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="worklogBtnLayout">
+          <item><widget class="QPushButton" name="btnRefreshWorklog"><property name="text"><string>Refresh</string></property><property name="minimumSize"><size><width>120</width><height>40</height></size></property></widget></item>
+          <item><widget class="QPushButton" name="btnExportWorklog"><property name="text"><string>Export Worklog</string></property><property name="minimumSize"><size><width>140</width><height>40</height></size></property></widget></item>
+         </layout>
+        </item>
+        <item><widget class="QTextEdit" name="txtWorklog"><property name="readOnly"><bool>true</bool></property><property name="font"><font><pointsize>12</pointsize><family>monospace</family></font></property></widget></item>
+       </layout>
+      </widget>
+
+      <!-- Page 15: Troubleshoot -->
+      <widget class="QWidget" name="pageTroubleshoot">
+       <layout class="QVBoxLayout" name="troubleshootLayout">
+        <item><widget class="QLabel" name="lblTroubleshoot"><property name="text"><string>Troubleshooting</string></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="troubleshootBtnLayout">
+          <item><widget class="QPushButton" name="btnTestDbConnection"><property name="text"><string>Test DB Connection</string></property><property name="minimumSize"><size><width>160</width><height>45</height></size></property></widget></item>
+          <item><widget class="QPushButton" name="btnViewLogs"><property name="text"><string>View Logs</string></property><property name="minimumSize"><size><width>140</width><height>45</height></size></property></widget></item>
+          <item><widget class="QPushButton" name="btnExportDiagnostics"><property name="text"><string>Export Diagnostics</string></property><property name="minimumSize"><size><width>160</width><height>45</height></size></property></widget></item>
+         </layout>
+        </item>
+        <item><spacer name="troubleshootSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+       </layout>
+      </widget>
+
+      <!-- Page 16: Register -->
+      <widget class="QWidget" name="pageRegister">
+       <layout class="QVBoxLayout" name="registerLayout">
+        <item><spacer name="registerSpacerTop"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+        <item>
+         <layout class="QHBoxLayout" name="registerCenter">
+          <item><spacer name="registerSpacerLeft"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+          <item>
+           <widget class="QFrame" name="registerFrame">
+            <property name="minimumSize"><size><width>400</width><height>0</height></size></property>
+            <property name="maximumSize"><size><width>500</width><height>16777215</height></size></property>
+            <property name="frameShape"><enum>QFrame::StyledPanel</enum></property>
+            <layout class="QVBoxLayout" name="registerFrameLayout">
+             <property name="topMargin"><number>30</number></property>
+             <property name="bottomMargin"><number>30</number></property>
+             <item><widget class="QLabel" name="lblRegisterTitle"><property name="text"><string>Register New User</string></property><property name="alignment"><set>Qt::AlignCenter</set></property><property name="font"><font><pointsize>18</pointsize><weight>75</weight><bold>true</bold></font></property></widget></item>
+             <item><widget class="QLabel" name="lblRegisterSubtitle"><property name="text"><string>SuperAdmin only</string></property><property name="alignment"><set>Qt::AlignCenter</set></property><property name="styleSheet"><string notr="true">color: #c62828;</string></property></widget></item>
+             <item><spacer name="registerSpacer1"><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>10</height></size></property></spacer></item>
+             <item><widget class="QLineEdit" name="txtUsername_register"><property name="placeholderText"><string>Username</string></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+             <item><widget class="QPushButton" name="btnClear_username_register"><property name="text"><string>Clear</string></property></widget></item>
+             <item><widget class="QLineEdit" name="txtPassword1_register"><property name="placeholderText"><string>Password</string></property><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+             <item><widget class="QPushButton" name="btnClear_password1_register"><property name="text"><string>Clear</string></property></widget></item>
+             <item><widget class="QLineEdit" name="txtPassword2_register"><property name="placeholderText"><string>Confirm Password</string></property><property name="echoMode"><enum>QLineEdit::Password</enum></property><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property></widget></item>
+             <item><widget class="QPushButton" name="btnClear_password2_register"><property name="text"><string>Clear</string></property></widget></item>
+             <item><widget class="QCheckBox" name="chkHide_register"><property name="text"><string>Show passwords</string></property></widget></item>
+             <item><widget class="QComboBox" name="cboRole_register"><property name="minimumSize"><size><width>0</width><height>40</height></size></property><property name="font"><font><pointsize>13</pointsize></font></property><property name="currentIndex"><number>0</number></property><item><property name="text"><string>Clerk</string></property></item><item><property name="text"><string>Admin</string></property></item><item><property name="text"><string>SuperAdmin</string></property></item></widget></item>
+             <item><widget class="QPushButton" name="btnRegister"><property name="text"><string>REGISTER</string></property><property name="minimumSize"><size><width>160</width><height>50</height></size></property><property name="font"><font><pointsize>14</pointsize><weight>75</weight><bold>true</bold></font></property><property name="styleSheet"><string notr="true">QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 8px; } QPushButton:hover { background-color: #005a9e; }</string></property></widget></item>
+            </layout>
+           </widget>
+          </item>
+          <item><spacer name="registerSpacerRight"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+         </layout>
+        </item>
+        <item><spacer name="registerSpacerBottom"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer></item>
+       </layout>
+      </widget>
+
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry"><rect><x>0</x><y>0</y><width>1280</width><height>24</height></rect></property>
+   <widget class="QMenu" name="menuFile"><property name="title"><string>File</string></property><addaction name="actionLog_in"/><addaction name="actionLog_out"/><addaction name="actionRegister"/><addaction name="separator"/><addaction name="actionClose"/></widget>
+   <widget class="QMenu" name="menuItems"><property name="title"><string>Items</string></property><addaction name="actionSell_Item"/><addaction name="separator"/><addaction name="actionAdd_Items"/><addaction name="actionEdit_Items"/><addaction name="actionRemove_Items"/><addaction name="actionUndo_Removed_Items"/><addaction name="separator"/><addaction name="actionManage_Categories"/><addaction name="actionManage_Shelves"/></widget>
+   <widget class="QMenu" name="menuSales"><property name="title"><string>Sales</string></property><addaction name="actionSales_History"/><addaction name="actionMake_Report"/></widget>
+   <widget class="QMenu" name="menuTools"><property name="title"><string>Tools</string></property><addaction name="actionDatabase_Selection"/><addaction name="actionCreate_Database"/><addaction name="separator"/><addaction name="actionAccounts"/><addaction name="actionPreferences"/><addaction name="actionWorklogStats"/><addaction name="actionTroubleshoot"/></widget>
+   <addaction name="menuFile"/><addaction name="menuItems"/><addaction name="menuSales"/><addaction name="menuTools"/>
+  </widget>
+  <action name="actionClose"><property name="text"><string>Close</string></property></action>
+  <action name="actionLog_out"><property name="text"><string>Log Out</string></property></action>
+  <action name="actionLog_in"><property name="text"><string>Log In</string></property></action>
+  <action name="actionRegister"><property name="text"><string>Register User</string></property></action>
+  <action name="actionSell_Item"><property name="text"><string>Sell Item (POS)</string></property></action>
+  <action name="actionAdd_Items"><property name="text"><string>Add Item</string></property></action>
+  <action name="actionEdit_Items"><property name="text"><string>Edit Item</string></property></action>
+  <action name="actionRemove_Items"><property name="text"><string>Remove Item</string></property></action>
+  <action name="actionUndo_Removed_Items"><property name="text"><string>Undo Removed Items</string></property></action>
+  <action name="actionManage_Categories"><property name="text"><string>Manage Categories</string></property></action>
+  <action name="actionManage_Shelves"><property name="text"><string>Manage Shelves</string></property></action>
+  <action name="actionSales_History"><property name="text"><string>Sales History</string></property></action>
+  <action name="actionMake_Report"><property name="text"><string>Sales Report</string></property></action>
+  <action name="actionDatabase_Selection"><property name="text"><string>Database Selection</string></property></action>
+  <action name="actionCreate_Database"><property name="text"><string>Create Database</string></property></action>
+  <action name="actionAccounts"><property name="text"><string>Accounts</string></property></action>
+  <action name="actionPreferences"><property name="text"><string>Preferences</string></property></action>
+  <action name="actionWorklogStats"><property name="text"><string>Worklog Statistics</string></property></action>
+  <action name="actionTroubleshoot"><property name="text"><string>Troubleshoot</string></property></action>
+ </widget>
+</ui>

@@ -1,0 +1,59 @@
+# Build outputs
+build-*/
+release/
+dist/
+*.o
+*.obj
+*.moc
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+Makefile
+.qmake.stash
+*.pro.user
+*.a
+*.lib
+app/QMark
+app/QMark.exe
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Log files
+*.log
+worklog_*.log
+telemetry_*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Binaries (built separately)
+*.exe
+*.app
+QMark-x64.exe
+QMark-x86.exe
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated build files
+src/app/moc_*.cpp
+src/app/moc_*.h
+src/app/ui_*.h
+src/app/QMark
+src/app/Makefile
+src/Makefile
+src/sqlitecpp/Makefile
+src/sqlitecpp/libSQLiteCpp.a
+src/sqlitecpp/*.o
+src/app/*.o
+src/sqlitecpp/*.win64.o
+aqtinstall.log
+src/.qmake.stash

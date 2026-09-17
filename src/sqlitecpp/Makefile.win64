@@ -1,0 +1,27 @@
+CXX = x86_64-w64-mingw32-g++
+AR = x86_64-w64-mingw32-ar
+CXXFLAGS = -std=c++17 -O2 -Wall -DWIN32 -DMINGW_HAS_SECURE_API=1
+
+SQLITE_DIR = ../../sqlitecpp
+SQLITE3_DIR = /home/sb3x/qmark-build
+INCLUDES = -I$(SQLITE_DIR)/include -I$(SQLITE3_DIR)
+
+SRCS = \
+    $(SQLITE_DIR)/src/Backup.cpp \
+    $(SQLITE_DIR)/src/Column.cpp \
+    $(SQLITE_DIR)/src/Database.cpp \
+    $(SQLITE_DIR)/src/Exception.cpp \
+    $(SQLITE_DIR)/src/Savepoint.cpp \
+    $(SQLITE_DIR)/src/Statement.cpp \
+    $(SQLITE_DIR)/src/Transaction.cpp
+
+OBJS = $(SRCS:.cpp=.win64.o)
+
+libSQLiteCpp.a: $(OBJS)
+	$(AR) rcs $@ $(OBJS)
+
+%.win64.o: %.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+clean:
+	rm -f $(OBJS) libSQLiteCpp.a
