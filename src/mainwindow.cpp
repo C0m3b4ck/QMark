@@ -13,6 +13,7 @@
 #include <QScrollBar>
 #include <QGridLayout>
 #include <QScrollArea>
+#include <unordered_map>
 #include <QFrame>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -36,7 +37,7 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     ui->setupUi(this);
 
     // ── Window title ──────────────────────────────────────────
-    setWindowTitle("QMark — School Shop PoS");
+    setWindowTitle("QMark");
 
     // ── Load preferences ──────────────────────────────────────
     QSettings settings("QMark", "SchoolShop");
@@ -55,6 +56,9 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
 
     // Connect Sell button in top bar
     connect(ui->btnSellNav, &QPushButton::clicked, this, &MainWindow::on_actionSell_Item_triggered);
+    // Connect dashboard buttons
+    connect(ui->btnDashboardSell, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
+    connect(ui->btnUndoSale, &QPushButton::clicked, this, &MainWindow::on_btnUndoSale_clicked);
 
     // ── Start at login page ───────────────────────────────────
     if (ui->stackedWidget) {
@@ -168,8 +172,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
-    // Auto-adapt grid columns when window resizes
-    if (ui->gridLayoutItemScroll) {
+    // Auto-adapt grid columns when window resizes (on sell page)
+    if (ui->gridLayoutItemScroll && ui->scrollAreaItems) {
         int width = ui->scrollAreaItems->viewport()->width();
         int cols = qMax(1, width / 260); // each card ~240px + 20px margin
         for (int _c = 0; _c < cols; ++_c) ui->gridLayoutItemScroll->setColumnStretch(_c, 1);
@@ -239,9 +243,10 @@ void MainWindow::on_btnLogin_clicked()
 
     LOG_INFO("User logged in: " + username);
 
-    // Navigate to main/sell page
+    // Navigate to dashboard
     if (ui->stackedWidget) {
-        ui->stackedWidget->setCurrentIndex(1); // main page
+        ui->stackedWidget->setCurrentIndex(1); // dashboard
+        refreshDashboard();
     }
 
     statusBar()->showMessage("Logged in as " + username + " (" + QString::fromStdString(user->roleName()) + ")");
@@ -250,8 +255,9 @@ void MainWindow::on_btnLogin_clicked()
 // ── Register ───────────────────────────────────────────────────
 void MainWindow::on_btnRegister_clicked()
 {
-    // Only SuperAdmin can register
-    if (!m_isLoggedIn || getCurrentUserRole() != Domain::User::Role::SuperAdmin) {
+    // Allow registration without login when no users exist (first-run)
+    bool noUsers = m_db.getAllUsers().empty();
+    if (!noUsers && (!m_isLoggedIn || getCurrentUserRole() != Domain::User::Role::SuperAdmin)) {
         QMessageBox::warning(this, "Register", "Only SuperAdmin can register new users.");
         return;
     }
@@ -339,10 +345,10 @@ void MainWindow::on_actionLog_in_triggered()
 
 void MainWindow::on_actionRegister_triggered()
 {
-    if (checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) {
+    bool noUsers = m_db.getAllUsers().empty();
+    if (noUsers || checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) {
         if (ui->stackedWidget) {
-            // Could navigate to a dedicated register page
-            QMessageBox::information(this, "Register", "Use the Register form to create a new user.");
+            ui->stackedWidget->setCurrentIndex(16); // Register page
         }
     }
 }
@@ -631,6 +637,116 @@ void MainWindow::on_btnUndoAll_undoremoved_clicked()
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Dashboard
+// ═══════════════════════════════════════════════════════════════════
+
+void MainWindow::refreshDashboard()
+{
+    // Total items
+    auto items = m_db.getAllItems();
+    int totalItems = static_cast<int>(items.size());
+    if (ui->lblTotalItemsValue)
+        ui->lblTotalItemsValue->setText(QString::number(totalItems));
+
+    // Build item name lookup
+    std::unordered_map<std::string, std::string> itemNames;
+    for (const auto& it : items) {
+        itemNames[it.id] = it.name;
+    }
+
+    // Sales stats
+    auto sales = m_db.getAllSales();
+    int itemsSold = 0;
+    double revenue = 0.0;
+    for (const auto& s : sales) {
+        itemsSold += s.quantitySold;
+        revenue += s.totalAmount;
+    }
+    if (ui->lblItemsSoldValue)
+        ui->lblItemsSoldValue->setText(QString::number(itemsSold));
+    if (ui->lblRevenueValue)
+        ui->lblRevenueValue->setText("$" + QString::number(revenue, 'f', 2));
+
+    // Recent sales (last 10) — getAllSales returns most recent first
+    if (ui->lstRecentSales) {
+        ui->lstRecentSales->clear();
+        int count = 0;
+        for (int i = 0; i < static_cast<int>(sales.size()) && count < 10; ++i, ++count) {
+            const auto& s = sales[i];
+            QString itemName = QString::fromStdString(
+                itemNames.count(s.itemId) ? itemNames[s.itemId] : s.itemId);
+            QString text = itemName
+                + "  ×" + QString::number(s.quantitySold)
+                + "  $" + QString::number(s.totalAmount, 'f', 2);
+            QListWidgetItem* item = new QListWidgetItem(text);
+            item->setData(Qt::UserRole, QString::fromStdString(s.id));
+            ui->lstRecentSales->addItem(item);
+        }
+        if (ui->lstRecentSales->count() == 0) {
+            QListWidgetItem* placeholder = new QListWidgetItem("No sales recorded yet.");
+            placeholder->setFlags(Qt::NoItemFlags);
+            ui->lstRecentSales->addItem(placeholder);
+        }
+    }
+}
+
+void MainWindow::on_btnDashboardSell_clicked()
+{
+    on_actionSell_Item_triggered();
+}
+
+void MainWindow::on_btnUndoSale_clicked()
+{
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+
+    auto sales = m_db.getAllSales();
+    if (sales.empty()) {
+        QMessageBox::information(this, "Undo Sale", "No sales to undo.");
+        return;
+    }
+
+    // Show the most recent sale and ask to confirm undo (first in list since sorted DESC)
+    const auto& last = sales[0];
+    auto item = m_db.getItemById(last.itemId);
+    QString itemName = item.has_value()
+        ? QString::fromStdString(item->name)
+        : QString::fromStdString(last.itemId);
+
+    QMessageBox::StandardButton reply = QMessageBox::question(this, "Undo Sale",
+        "Undo the most recent sale?\n\n"
+        + itemName
+        + " ×" + QString::number(last.quantitySold)
+        + "  ($" + QString::number(last.totalAmount, 'f', 2) + ")",
+        QMessageBox::Yes | QMessageBox::No);
+
+    if (reply != QMessageBox::Yes) return;
+
+    // Restore stock
+    if (item.has_value()) {
+        Domain::Item updated = item.value();
+        updated.quantity += last.quantitySold;
+        if (updated.status == "Out of Stock" && updated.quantity > 0)
+            updated.status = "In Stock";
+        else if (updated.status == "Low Stock" && updated.quantity > 10)
+            updated.status = "In Stock";
+        m_db.updateItem(updated);
+    }
+
+    // Remove the sale record
+    m_db.deleteSale(last.id);
+
+    LOG_INFO("Sale undone: " + itemName + " x" + QString::number(last.quantitySold));
+    QMessageBox::information(this, "Undo Sale", "Sale undone. Stock restored.");
+    refreshDashboard();
+}
+
+void MainWindow::on_lstRecentSales_itemClicked(QListWidgetItem *item)
+{
+    Q_UNUSED(item);
+    // Could show sale details in the future
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Sell Item (POS)
 // ═══════════════════════════════════════════════════════════════════
 
@@ -646,7 +762,7 @@ void MainWindow::on_actionSell_Item_triggered()
 
 void MainWindow::on_btnSearch_sell_clicked()
 {
-    QString term = ui->txtSearch_sell->text().trimmed();
+    QString term = ui->txtSearch_sell_page->text().trimmed();
     std::vector<Domain::Item> items;
     if (term.isEmpty()) {
         items = m_db.getAllItems();

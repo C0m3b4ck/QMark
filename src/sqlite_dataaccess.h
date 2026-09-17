@@ -35,6 +35,7 @@ public:
 
     // Sale operations
     bool recordSale(const Domain::Sale& sale) override;
+    bool deleteSale(const std::string& saleId) override;
     bool sellItemAtomic(const std::string& itemId, int quantity, double unitPrice, double totalAmount, const std::string& soldBy) override;
     std::vector<Domain::Sale> getAllSales() override;
     std::vector<Domain::Sale> getSalesForItem(const std::string& itemId) override;

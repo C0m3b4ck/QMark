@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QSettings>
 #include <QDir>
+#include <QtPlugin>
 #include <cstdlib>
 
 #ifdef QT_STATICPLUGIN
@@ -15,7 +16,9 @@ Q_IMPORT_PLUGIN(QSQLiteDriverPlugin)
 Q_IMPORT_PLUGIN(QGifPlugin)
 Q_IMPORT_PLUGIN(QICOPlugin)
 Q_IMPORT_PLUGIN(QJpegPlugin)
-Q_IMPORT_PLUGIN(QWindowsVistaStylePlugin)
+Q_IMPORT_PLUGIN(QSvgPlugin)
+Q_IMPORT_PLUGIN(QSvgIconPlugin)
+Q_IMPORT_PLUGIN(QModernWindowsStylePlugin)
 #endif
 
 static void cleanupLogger() {
@@ -30,7 +33,7 @@ int main(int argc, char *argv[])
     // Application metadata
     a.setOrganizationName("QMark");
     a.setApplicationName("QMarkSchoolShop");
-    a.setApplicationDisplayName("QMark — School Shop PoS");
+    a.setApplicationDisplayName("QMark");
 
     std::atexit(cleanupLogger);
     QObject::connect(&a, &QCoreApplication::aboutToQuit, &cleanupLogger);

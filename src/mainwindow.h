@@ -157,6 +157,11 @@ private slots:
     void on_btnRefreshWorklog_clicked();
     void on_btnExportWorklog_clicked();
 
+    // ── Dashboard ──────────────────────────────────────────────────
+    void on_btnDashboardSell_clicked();
+    void on_btnUndoSale_clicked();
+    void on_lstRecentSales_itemClicked(QListWidgetItem *item);
+
     // ── Troubleshoot ──────────────────────────────────────────────
     void on_actionTroubleshoot_triggered();
     void on_btnTestDbConnection_clicked();
@@ -174,6 +179,9 @@ private:
 
     // ── First-run setup ───────────────────────────────────────────
     void showFirstRunSetup();
+
+    // ── Dashboard ────────────────────────────────────────────────
+    void refreshDashboard();
 
     // ── POS Grid helpers ──────────────────────────────────────────
     void rebuildItemGrid(const std::vector<Domain::Item>& items);

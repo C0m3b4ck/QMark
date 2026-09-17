@@ -497,6 +497,21 @@ bool SQLiteDataAccess::recordSale(const Domain::Sale& sale)
     }
 }
 
+bool SQLiteDataAccess::deleteSale(const std::string& saleId)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_itemsDb) return false;
+    try {
+        SQLite::Statement query(*m_itemsDb, "DELETE FROM sales WHERE id = ?");
+        query.bind(1, saleId);
+        query.exec();
+        return true;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
 bool SQLiteDataAccess::sellItemAtomic(const std::string& itemId, int quantity, double unitPrice, double totalAmount, const std::string& soldBy)
 {
     std::lock_guard<std::mutex> lock(m_mutex);

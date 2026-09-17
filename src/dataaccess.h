@@ -42,6 +42,7 @@ public:
 
     // Sale operations
     virtual bool recordSale(const Domain::Sale& sale) = 0;
+    virtual bool deleteSale(const std::string& saleId) = 0;
     virtual bool sellItemAtomic(const std::string& itemId, int quantity, double unitPrice, double totalAmount, const std::string& soldBy) = 0;
     virtual std::vector<Domain::Sale> getAllSales() = 0;
     virtual std::vector<Domain::Sale> getSalesForItem(const std::string& itemId) = 0;

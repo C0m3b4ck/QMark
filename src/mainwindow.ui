@@ -12,12 +12,12 @@
   </property>
   <property name="minimumSize">
    <size>
-    <width>800</width>
-    <height>600</height>
+    <width>640</width>
+    <height>480</height>
    </size>
   </property>
   <property name="windowTitle">
-   <string>QMark — School Shop PoS</string>
+   <string>QMark</string>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayoutCentral">
@@ -76,7 +76,7 @@
              <item>
               <widget class="QLabel" name="lblLoginTitle">
                <property name="text">
-                <string>QMark — School Shop</string>
+                <string>QMark</string>
                </property>
                <property name="alignment">
                 <set>Qt::AlignCenter</set>
@@ -211,7 +211,7 @@
        </layout>
       </widget>
 
-      <!-- Page 1: Main Dashboard / POS Grid -->
+      <!-- Page 1: Dashboard -->
       <widget class="QWidget" name="pageMain">
        <layout class="QVBoxLayout" name="mainLayout">
         <property name="spacing">
@@ -242,7 +242,7 @@
            <item>
             <widget class="QLabel" name="lblAppTitle">
              <property name="text">
-              <string>QMark — School Shop PoS</string>
+              <string>QMark</string>
              </property>
              <property name="styleSheet">
               <string notr="true">color: white; font-size: 16px; font-weight: bold;</string>
@@ -278,82 +278,260 @@
           </layout>
          </widget>
         </item>
-        <!-- Search bar -->
+        <!-- Dashboard content -->
         <item>
-         <widget class="QFrame" name="searchBar">
-          <property name="maximumSize">
-           <size>
-            <width>16777215</width>
-            <height>50</height>
-           </size>
-          </property>
-          <layout class="QHBoxLayout" name="searchBarLayout">
-           <property name="leftMargin">
-            <number>10</number>
-           </property>
-           <property name="rightMargin">
-            <number>10</number>
-           </property>
-           <item>
-            <widget class="QLineEdit" name="txtSearch_sell">
-             <property name="placeholderText">
-              <string>Search items by name, category, shelf...</string>
-             </property>
-             <property name="minimumSize">
-              <size>
-               <width>0</width>
-               <height>36</height>
-              </size>
-             </property>
-             <property name="font">
-              <font>
-               <pointsize>13</pointsize>
-              </font>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QPushButton" name="btnSearch_sell">
-             <property name="text">
-              <string>Search</string>
-             </property>
-             <property name="minimumSize">
-              <size>
-               <width>100</width>
-                <height>36</height>
-              </size>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </widget>
-        </item>
-        <!-- Item grid inside scroll area -->
-        <item>
-         <widget class="QScrollArea" name="scrollAreaItems">
+         <widget class="QScrollArea" name="scrollAreaDashboard">
           <property name="widgetResizable">
            <bool>true</bool>
           </property>
           <property name="styleSheet">
-           <string notr="true">background: #f0f0f0;</string>
+           <string notr="true">background: #f5f5f5;</string>
           </property>
-          <widget class="QWidget" name="scrollAreaWidgetContents">
-           <layout class="QGridLayout" name="gridLayoutItemScroll">
+          <widget class="QWidget" name="dashboardContent">
+           <layout class="QVBoxLayout" name="dashboardLayout">
             <property name="spacing">
-             <number>10</number>
+             <number>20</number>
             </property>
             <property name="leftMargin">
-             <number>10</number>
+             <number>20</number>
             </property>
             <property name="rightMargin">
-             <number>10</number>
+             <number>20</number>
             </property>
             <property name="topMargin">
-             <number>10</number>
+             <number>20</number>
             </property>
             <property name="bottomMargin">
-             <number>10</number>
+             <number>20</number>
             </property>
+            <!-- Stats row -->
+            <item>
+             <layout class="QHBoxLayout" name="statsLayout">
+              <property name="spacing">
+               <number>15</number>
+              </property>
+              <item>
+               <widget class="QFrame" name="cardTotalItems">
+                <property name="minimumSize">
+                 <size>
+                  <width>150</width>
+                  <height>100</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QFrame { background: white; border-radius: 10px; border: 1px solid #e0e0e0; }</string>
+                </property>
+                <layout class="QVBoxLayout" name="cardTotalItemsLayout">
+                 <item>
+                  <widget class="QLabel" name="lblTotalItemsTitle">
+                   <property name="text">
+                    <string>Total Items</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">color: #666; font-size: 12px;</string>
+                   </property>
+                   <property name="alignment">
+                    <set>Qt::AlignCenter</set>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="lblTotalItemsValue">
+                   <property name="text">
+                    <string>0</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">color: #0078d4; font-size: 32px; font-weight: bold;</string>
+                   </property>
+                   <property name="alignment">
+                    <set>Qt::AlignCenter</set>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+              <item>
+               <widget class="QFrame" name="cardItemsSold">
+                <property name="minimumSize">
+                 <size>
+                  <width>150</width>
+                  <height>100</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QFrame { background: white; border-radius: 10px; border: 1px solid #e0e0e0; }</string>
+                </property>
+                <layout class="QVBoxLayout" name="cardItemsSoldLayout">
+                 <item>
+                  <widget class="QLabel" name="lblItemsSoldTitle">
+                   <property name="text">
+                    <string>Items Sold</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">color: #666; font-size: 12px;</string>
+                   </property>
+                   <property name="alignment">
+                    <set>Qt::AlignCenter</set>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="lblItemsSoldValue">
+                   <property name="text">
+                    <string>0</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">color: #2e7d32; font-size: 32px; font-weight: bold;</string>
+                   </property>
+                   <property name="alignment">
+                    <set>Qt::AlignCenter</set>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+              <item>
+               <widget class="QFrame" name="cardRevenue">
+                <property name="minimumSize">
+                 <size>
+                  <width>150</width>
+                  <height>100</height>
+                 </size>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QFrame { background: white; border-radius: 10px; border: 1px solid #e0e0e0; }</string>
+                </property>
+                <layout class="QVBoxLayout" name="cardRevenueLayout">
+                 <item>
+                  <widget class="QLabel" name="lblRevenueTitle">
+                   <property name="text">
+                    <string>Revenue</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">color: #666; font-size: 12px;</string>
+                   </property>
+                   <property name="alignment">
+                    <set>Qt::AlignCenter</set>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="lblRevenueValue">
+                   <property name="text">
+                    <string>$0.00</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">color: #e65100; font-size: 32px; font-weight: bold;</string>
+                   </property>
+                   <property name="alignment">
+                    <set>Qt::AlignCenter</set>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <!-- Quick actions -->
+            <item>
+             <layout class="QHBoxLayout" name="actionsLayout">
+              <property name="spacing">
+               <number>15</number>
+              </property>
+              <item>
+               <widget class="QPushButton" name="btnDashboardSell">
+                <property name="text">
+                 <string>SELL</string>
+                </property>
+                <property name="minimumSize">
+                 <size>
+                  <width>0</width>
+                  <height>80</height>
+                 </size>
+                </property>
+                <property name="font">
+                 <font>
+                  <pointsize>16</pointsize>
+                  <weight>75</weight>
+                  <bold>true</bold>
+                 </font>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QPushButton { background-color: #2e7d32; color: white; border: none; border-radius: 10px; } QPushButton:hover { background-color: #1b5e20; }</string>
+                </property>
+                <property name="cursor">
+                 <enum>Qt::PointingHandCursor</enum>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QPushButton" name="btnUndoSale">
+                <property name="text">
+                 <string>UNDO SALE</string>
+                </property>
+                <property name="minimumSize">
+                 <size>
+                  <width>0</width>
+                  <height>80</height>
+                 </size>
+                </property>
+                <property name="font">
+                 <font>
+                  <pointsize>16</pointsize>
+                  <weight>75</weight>
+                  <bold>true</bold>
+                 </font>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QPushButton { background-color: #c62828; color: white; border: none; border-radius: 10px; } QPushButton:hover { background-color: #8e0000; }</string>
+                </property>
+                <property name="cursor">
+                 <enum>Qt::PointingHandCursor</enum>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <!-- Recent sales -->
+            <item>
+             <widget class="QLabel" name="lblRecentSales">
+              <property name="text">
+               <string>Recent Sales</string>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">color: #333; font-size: 16px; font-weight: bold;</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QListWidget" name="lstRecentSales">
+              <property name="styleSheet">
+               <string notr="true">QListWidget { background: white; border: 1px solid #e0e0e0; border-radius: 8px; font-size: 13px; }</string>
+              </property>
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>150</height>
+               </size>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="dashboardSpacer">
+              <property name="orientation">
+               <enum>Qt::Vertical</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>40</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
            </layout>
           </widget>
          </widget>
@@ -1128,13 +1306,13 @@
        </layout>
       </widget>
 
-      <!-- Page 6: POS Sell (item grid is reused from pageMain via programmatic grid) -->
+      <!-- Page 6: POS Sell -->
       <widget class="QWidget" name="pageSellGrid">
        <layout class="QVBoxLayout" name="sellGridLayout">
         <item>
          <widget class="QLabel" name="lblSellPage">
           <property name="text">
-           <string>Shop Floor — Tap an item to sell</string>
+           <string>Select an item to sell</string>
           </property>
           <property name="font">
            <font>
@@ -1182,6 +1360,35 @@
            </widget>
           </item>
          </layout>
+        </item>
+        <item>
+         <widget class="QScrollArea" name="scrollAreaItems">
+          <property name="widgetResizable">
+           <bool>true</bool>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">background: #f0f0f0;</string>
+          </property>
+          <widget class="QWidget" name="scrollAreaWidgetContents">
+           <layout class="QGridLayout" name="gridLayoutItemScroll">
+            <property name="spacing">
+             <number>10</number>
+            </property>
+            <property name="leftMargin">
+             <number>10</number>
+            </property>
+            <property name="rightMargin">
+             <number>10</number>
+            </property>
+            <property name="topMargin">
+             <number>10</number>
+            </property>
+            <property name="bottomMargin">
+             <number>10</number>
+            </property>
+           </layout>
+          </widget>
+         </widget>
         </item>
        </layout>
       </widget>
@@ -2351,7 +2558,7 @@
    </property>
    <widget class="QMenu" name="menuFile">
     <property name="title">
-     <string>File</string>
+     <string>Account</string>
     </property>
     <addaction name="actionLog_in"/>
     <addaction name="actionLog_out"/>
@@ -2401,7 +2608,7 @@
   <!-- Actions -->
   <action name="actionClose">
    <property name="text">
-    <string>Close</string>
+    <string>Exit</string>
    </property>
   </action>
   <action name="actionLog_out">

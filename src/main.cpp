@@ -33,7 +33,7 @@ int main(int argc, char *argv[])
     // Application metadata
     a.setOrganizationName("QMark");
     a.setApplicationName("QMarkSchoolShop");
-    a.setApplicationDisplayName("QMark — School Shop PoS");
+    a.setApplicationDisplayName("QMark");
 
     std::atexit(cleanupLogger);
     QObject::connect(&a, &QCoreApplication::aboutToQuit, &cleanupLogger);
