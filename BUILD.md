@@ -4,6 +4,42 @@
 
 ---
 
+## Quick Start (Build Scripts)
+
+The fastest way to build QMark is using the provided scripts:
+
+```bash
+# Build dependencies (SQLite3 + libsodium) for a target
+./build-deps.sh linux-x64      # or linux-x86, win-x64, win-x86
+
+# Build QMark for a specific target
+./build-linux-x64.sh           # Linux x64 (native)
+./build-linux-x86.sh           # Linux x86 (cross-compile)
+./build-win-x64.sh             # Windows x64 (cross-compile)
+./build-win-x86.sh             # Windows x86 (cross-compile)
+
+# Build all targets at once
+./build-all.sh
+```
+
+**Environment variables** for customizing paths:
+
+| Variable | Default | Description |
+|---|---|---|
+| `QT_DIR` | `/opt/qt6-win64` | Qt6 static install prefix (Windows builds) |
+| `SQLITE3_DIR` | `/opt/sqlite3` | SQLite3 amalgamation directory |
+| `SODIUM_DIR` | `/opt/libsodium-win64` | libsodium install prefix |
+| `SQLITECPP_DIR` | `./sqlitecpp` | SQLiteCpp source directory |
+| `QT_HOST_DIR` | `/opt/qt6-host` | Qt host tools (moc, uic) |
+| `JOBS` | `$(nproc)` | Parallel compilation jobs |
+
+Example with custom paths:
+```bash
+QT_DIR=/home/user/qt6-static SQLITE3_DIR=/home/user/sqlite3 ./build-win-x64.sh
+```
+
+---
+
 ## Supported Targets
 
 | Target | Architecture | Compiler | Host OS |

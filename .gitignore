@@ -38,6 +38,11 @@ telemetry_*.log
 *.app
 QMark-x64.exe
 QMark-x86.exe
+QMark-x64
+QMark-x86
+
+# Dependency build output
+deps/
 
 # OS
 .DS_Store
