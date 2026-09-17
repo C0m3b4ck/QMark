@@ -70,16 +70,9 @@ All builds are **completely statically linked** — no external DLLs or shared l
 
 ## First-Time Setup
 
-On first launch, QMark creates `items.db` and `users.db` in the current directory. To create a first SuperAdmin account:
+On first launch, QMark detects that no user accounts exist and automatically prompts you to create a **SuperAdmin** account through a guided setup wizard. Simply enter a username and password when prompted.
 
-1. Insert a user directly via SQLite:
-   ```sql
-   INSERT INTO users (id, username, passwordHash, salt, role, createdAt)
-   VALUES ('1', 'admin', '<hashed-password>', '', 3, datetime('now'));
-   ```
-2. Or modify the application to allow initial registration
-3. Log in with the SuperAdmin credentials
-4. Create additional user accounts from the **Accounts** page
+After the initial SuperAdmin is created, you can log in and create additional user accounts from the **Accounts** page.
 
 ---
 

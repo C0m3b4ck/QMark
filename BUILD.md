@@ -376,9 +376,9 @@ tar czf QMark-Linux-x64-$(date +%Y%m%d).tar.gz QMark
 
 1. Place the binary in any directory
 2. On first launch, `items.db` and `users.db` are created in the current directory
-3. Use **Tools → Database Selection** to configure paths or create new databases
-4. Register a SuperAdmin account (see README.md)
-5. Log in and start selling
+3. The app automatically detects no users exist and prompts you to create a **SuperAdmin** account
+4. Log in with your new credentials
+5. Use **Tools → Database Selection** to configure paths if needed
 
 ---
 

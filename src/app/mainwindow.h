@@ -172,6 +172,9 @@ private:
     Worklog m_worklog;
     QString m_worklogFilePath;
 
+    // ── First-run setup ───────────────────────────────────────────
+    void showFirstRunSetup();
+
     // ── POS Grid helpers ──────────────────────────────────────────
     void rebuildItemGrid(const std::vector<Domain::Item>& items);
     QWidget* createItemCard(const Domain::Item& item);

@@ -60,11 +60,102 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     if (ui->stackedWidget) {
         ui->stackedWidget->setCurrentIndex(0); // login page
     }
+
+    // ── First-run: create initial SuperAdmin if no users exist ──
+    showFirstRunSetup();
 }
 
 MainWindow::~MainWindow()
 {
     delete ui;
+}
+
+// ── First-run Setup ─────────────────────────────────────────────
+// If no users exist in the database, prompt to create the first SuperAdmin.
+// This allows initial setup without manual SQLite commands.
+void MainWindow::showFirstRunSetup()
+{
+    // Check if any users already exist
+    auto users = m_db.getAllUsers();
+    if (!users.empty()) return; // users exist, nothing to do
+
+    // First-run: guide the user through creating a SuperAdmin
+    for (;;) {
+        QMessageBox info(this);
+        info.setWindowTitle("First-Time Setup");
+        info.setIcon(QMessageBox::Information);
+        info.setText("Welcome to QMark!\n\n"
+                     "No user accounts were found.\n"
+                     "You need to create a SuperAdmin account to get started.");
+        info.setInformativeText("Click OK to create your first SuperAdmin account.");
+        info.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
+        if (info.exec() != QMessageBox::Ok) {
+            // User cancelled — stay on login page, they can't do anything yet
+            return;
+        }
+
+        // Get username
+        bool ok = false;
+        QString username = QInputDialog::getText(this, "First-Time Setup",
+            "Choose a username for the SuperAdmin account:",
+            QLineEdit::Normal, QString(), &ok).trimmed();
+        if (!ok || username.isEmpty()) continue;
+
+        // Check for duplicates
+        if (m_db.getUserByUsername(username.toStdString()).has_value()) {
+            QMessageBox::warning(this, "First-Time Setup",
+                "A user with that username already exists. Please choose another.");
+            continue;
+        }
+
+        // Get password
+        QString password1 = QInputDialog::getText(this, "First-Time Setup",
+            "Choose a password:", QLineEdit::Password, QString(), &ok);
+        if (!ok || password1.isEmpty()) continue;
+
+        // Confirm password
+        QString password2 = QInputDialog::getText(this, "First-Time Setup",
+            "Confirm password:", QLineEdit::Password, QString(), &ok);
+        if (!ok) continue;
+
+        if (password1 != password2) {
+            QMessageBox::warning(this, "First-Time Setup", "Passwords do not match. Try again.");
+            continue;
+        }
+
+        if (password1.length() < 4) {
+            QMessageBox::warning(this, "First-Time Setup",
+                "Password must be at least 4 characters. Try again.");
+            continue;
+        }
+
+        // Hash the password and create the user
+        std::string hashedPw = hash_string(password1.toStdString());
+        if (hashedPw.empty()) {
+            QMessageBox::critical(this, "First-Time Setup",
+                "Failed to hash password. Please try again.");
+            continue;
+        }
+
+        Domain::User admin;
+        admin.id = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+        admin.username = username.toStdString();
+        admin.passwordHash = hashedPw;
+        admin.role = Domain::User::Role::SuperAdmin;
+        admin.createdAt = Domain::now();
+
+        if (m_db.addUser(admin)) {
+            QMessageBox::information(this, "First-Time Setup",
+                "SuperAdmin account created successfully!\n\n"
+                "You can now log in with your new credentials.");
+            LOG_INFO("First-run: SuperAdmin account created: " + username);
+            return; // Done — user can now log in
+        } else {
+            QMessageBox::critical(this, "First-Time Setup",
+                "Failed to create user. Please try again.");
+        }
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -77,8 +168,12 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
-    // Auto-adapt grid columns when window resizes by rebuilding the grid
-    // (only if items are currently displayed on the POS page)
+    // Auto-adapt grid columns when window resizes
+    if (ui->gridLayoutItemScroll) {
+        int width = ui->scrollAreaItems->viewport()->width();
+        int cols = qMax(1, width / 260); // each card ~240px + 20px margin
+        for (int _c = 0; _c < cols; ++_c) ui->gridLayoutItemScroll->setColumnStretch(_c, 1);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -574,6 +669,7 @@ void MainWindow::rebuildItemGrid(const std::vector<Domain::Item>& items)
 
     int width = ui->scrollAreaItems->viewport()->width();
     int cols = qMax(1, width / 260);
+    for (int _c = 0; _c < cols; ++_c) ui->gridLayoutItemScroll->setColumnStretch(_c, 1);
 
     int row = 0, col = 0;
     for (const auto& item : items) {
