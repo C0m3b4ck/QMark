@@ -4,38 +4,68 @@
 
 ---
 
-## Quick Start (Build Scripts)
-
-The fastest way to build QMark is using the provided scripts:
+## Quick Start
 
 ```bash
-# Build dependencies (SQLite3 + libsodium) for a target
-./build-deps.sh linux-x64      # or linux-x86, win-x64, win-x86
+# 1. Install prerequisites
+sudo apt install build-essential g++ mingw-w64 qt6-base-dev
 
-# Build QMark for a specific target
-./build-linux-x64.sh           # Linux x64 (native)
-./build-linux-x86.sh           # Linux x86 (cross-compile)
-./build-win-x64.sh             # Windows x64 (cross-compile)
-./build-win-x86.sh             # Windows x86 (cross-compile)
+# 2. Place dependencies (see Dependency Setup below)
+mkdir -p deps
+ln -s /path/to/qt6-static    deps/qt6-win64
+ln -s /path/to/sqlite3       deps/sqlite3
+ln -s /path/to/libsodium     deps/libsodium-win64
+ln -s /path/to/qt6-host      deps/qt6-host
 
-# Build all targets at once
-./build-all.sh
+# 3. Build
+./build-win-x64.sh            # Windows x64
+./build-win-x86.sh            # Windows x86
+./build-linux-x64.sh          # Linux x64
+./build-all.sh                # All targets
 ```
 
-**Environment variables** for customizing paths:
+---
 
-| Variable | Default | Description |
+## Build Scripts
+
+| Script | Target | Output |
 |---|---|---|
-| `QT_DIR` | `/opt/qt6-win64` | Qt6 static install prefix (Windows builds) |
-| `SQLITE3_DIR` | `/opt/sqlite3` | SQLite3 amalgamation directory |
-| `SODIUM_DIR` | `/opt/libsodium-win64` | libsodium install prefix |
-| `SQLITECPP_DIR` | `./sqlitecpp` | SQLiteCpp source directory |
-| `QT_HOST_DIR` | `/opt/qt6-host` | Qt host tools (moc, uic) |
-| `JOBS` | `$(nproc)` | Parallel compilation jobs |
+| `build-linux-x64.sh` | Linux x86_64 (native) | `QMark-x64` |
+| `build-linux-x86.sh` | Linux i686 (cross) | `QMark-x86` |
+| `build-win-x64.sh` | Windows x64 (cross) | `QMark-x64.exe` |
+| `build-win-x86.sh` | Windows x86 (cross) | `QMark-x86.exe` |
+| `build-all.sh` | All available targets | all of the above |
+| `build-deps.sh <target>` | Build SQLite3 + libsodium | static libs in `deps/` |
 
-Example with custom paths:
+Each script auto-detects dependencies in this order:
+
+1. **Environment variables** — `QT_DIR`, `SQLITE3_DIR`, `SODIUM_DIR`, `QT_HOST_DIR`
+2. **Project-local** — `deps/` directory (symlinks or real files)
+3. **User home** — `~/qt6-win64`, `~/sqlite3`, `~/libsodium-win64`, etc.
+4. **System-wide** — `/opt/qt6-win64`, `/opt/sqlite3`, `/opt/libsodium-win64`
+
+---
+
+## Dependency Setup
+
+The `deps/` directory is the recommended way to provide dependencies. Create symlinks pointing to your actual build directories:
+
 ```bash
-QT_DIR=/home/user/qt6-static SQLITE3_DIR=/home/user/sqlite3 ./build-win-x64.sh
+mkdir -p deps
+
+# Point each symlink to where you built/installed that dependency
+ln -s /your/path/to/qt6-static    deps/qt6-win64     # Qt6 static (Windows target)
+ln -s /your/path/to/qt6-host      deps/qt6-host      # Qt6 host tools (moc, uic)
+ln -s /your/path/to/sqlite3       deps/sqlite3       # Directory containing sqlite3.c
+ln -s /your/path/to/libsodium     deps/libsodium-win64  # libsodium install prefix
+```
+
+The `deps/` directory is gitignored — it stays local to your machine.
+
+Alternatively, set environment variables before running any build script:
+
+```bash
+QT_DIR=/my/qt6 SQLITE3_DIR=/my/sqlite3 SODIUM_DIR=/my/sodium ./build-win-x64.sh
 ```
 
 ---
@@ -98,24 +128,15 @@ pacman -S mingw-w64-x86_64-qt6-base mingw-w64-x86_64-qt6-svg
 pacman -S mingw-w64-x86_64-sqlite3 mingw-w64-x86_64-libsodium
 ```
 
-For MSYS2 MinGW 32-bit (x86):
-
-```bash
-pacman -S mingw-w64-i686-gcc mingw-w64-i686-cmake mingw-w64-i686-make
-pacman -S mingw-w64-i686-qt6-base mingw-w64-i686-qt6-svg
-pacman -S mingw-w64-i686-sqlite3 mingw-w64-i686-libsodium
-```
-
 ---
 
-## Building Static Libraries (Required for All Targets)
+## Building Static Dependencies
 
 ### SQLite3 (Static)
 
 Download the SQLite3 amalgamation and compile as a static library:
 
 ```bash
-# Download
 wget https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
 unzip sqlite-amalgamation-3460100.zip
 cd sqlite-amalgamation-3460100
@@ -157,9 +178,7 @@ make -j$(nproc) && make install
 
 For completely static builds, Qt must be built from source with `-static`.
 
-#### Option A: Cross-Compile from Linux (Recommended)
-
-This is the recommended approach — build Qt host tools natively, then cross-compile for Windows.
+#### Cross-Compile from Linux (Recommended)
 
 **Step 1 — Download Qt source:**
 
@@ -196,42 +215,19 @@ cmake --build . --parallel $(nproc)
 cmake --install .
 ```
 
-**Step 3 — Create cross-compilation toolchain file:**
-
-Create `mingw-x86_64.cmake`:
+**Step 3 — Create cross-compilation toolchain file** (`mingw-x86_64.cmake`):
 
 ```cmake
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 set(CMAKE_SYSTEM_VERSION 10.0)
-
 set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
 set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
 set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
-
 set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-```
-
-For x86 (i686):
-
-```cmake
-set(CMAKE_SYSTEM_NAME Windows)
-set(CMAKE_SYSTEM_PROCESSOR i686)
-set(CMAKE_SYSTEM_VERSION 5.1)
-
-set(CMAKE_C_COMPILER i686-w64-mingw32-gcc)
-set(CMAKE_CXX_COMPILER i686-w64-mingw32-g++)
-set(CMAKE_RC_COMPILER i686-w64-mingw32-windres)
-
-set(CMAKE_FIND_ROOT_PATH /usr/i686-w64-mingw32)
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 ```
 
 **Step 4 — Cross-compile Qt for Windows:**
@@ -268,15 +264,15 @@ cmake --install .
 
 For Windows x86, replace `x86_64` with `i686` throughout.
 
-#### Option B: Native MSYS2 Build (Windows Only)
+#### Native MSYS2 Build (Windows Only)
 
 From MSYS2 MinGW terminal, Qt is available as a pre-built package. For static builds, install the `-static` variants if available, or build Qt from source within MSYS2.
 
 ---
 
-## Building QMark
+## Manual Build (Without Scripts)
 
-### Linux x64 (Native Build)
+### Linux x64 (Native)
 
 ```bash
 cd src
@@ -287,40 +283,10 @@ qmake6 QMark.pro \
 make -j$(nproc)
 ```
 
-The binary will be in `src/app/QMark`.
-
-### Linux x86 (Cross-Compile from x64)
-
-```bash
-# Install 32-bit libraries
-sudo dpkg --add-architecture i386
-sudo apt update
-sudo apt install libsqlite3-dev:i386 libsodium-dev:i386
-
-cd src
-qmake6 QMark.pro \
-    QMAKE_CC=gcc \
-    QMAKE_CXX=g++ \
-    QMAKE_CFLAGS="-m32 -static" \
-    QMAKE_CXXFLAGS="-m32 -static" \
-    QMAKE_LFLAGS="-m32 -static -static-libgcc -static-libstdc++"
-make -j$(nproc)
-```
-
-### Windows x64 (Cross-Compile from Linux)
-
-Create a `win64-static.pro` include or pass flags directly:
+### Windows x64 (Cross-Compile)
 
 ```bash
 cd src
-
-# Build SQLiteCpp static library
-cd sqlitecpp
-x86_64-w64-mingw32-qmake6 sqlitecpp.pro
-make -j$(nproc)
-cd ..
-
-# Build QMark
 x86_64-w64-mingw32-qmake6 QMark.pro \
     INCLUDEPATH+=/opt/sqlite3/include \
     INCLUDEPATH+=/opt/libsodium-win64/include \
@@ -328,20 +294,11 @@ x86_64-w64-mingw32-qmake6 QMark.pro \
     LIBS+=-L/opt/sqlite3 -lsqlite3 \
     LIBS+=-L/opt/libsodium-win64/lib -lsodium \
     LIBS+=-L/opt/qt6-win64/lib \
-    QMAKE_CFLAGS_STATIC_WIN="-static" \
     QMAKE_LFLAGS+="-static -static-libgcc -static-libstdc++"
 make -j$(nproc)
 ```
 
-The binary will be in `src/app/QMark.exe`.
-
-### Windows x86 (Cross-Compile from Linux)
-
-Same as x64 but use `i686-w64-mingw32-` toolchain prefix and x86 paths.
-
-### Native Windows Build (MSYS2)
-
-From MSYS2 MinGW terminal:
+### MSYS2 (Native Windows)
 
 ```bash
 cd src
@@ -349,27 +306,16 @@ qmake QMark.pro
 make -j$(nproc)
 ```
 
-For static linking in MSYS2, add static flags to the `.pro` file or pass them via qmake.
-
 ---
 
-## Static Linking Flags Summary
+## Static Linking Details
 
-For a **completely static** binary, the following flags must be applied:
-
-### g++ / MinGW (linker flags)
+### Required Flags
 
 ```
--static                    # Static linking
--static-libgcc            # Static libgcc (no libgcc_s DLL)
--static-libstdc++         # Static libstdc++ (no libstdc++ DLL)
--static-runtime           # (MSVC only) Static C runtime
-```
-
-### qmake Variables
-
-```
-QMAKE_LFLAGS += -static -static-libgcc -static-libstdc++
+-static                    Static linking
+-static-libgcc            No libgcc_s DLL
+-static-libstdc++         No libstdc++ DLL
 ```
 
 ### Required Static Libraries
@@ -377,16 +323,14 @@ QMAKE_LFLAGS += -static -static-libgcc -static-libstdc++
 | Library | Static File | Notes |
 |---|---|---|
 | Qt 6 | `libQt6*.a` | Must build Qt from source with `-static` |
-| Qt Windows Platform Plugin | `plugins/platforms/libqwindows.a` | **Required on Windows** — links the QPA backend |
+| Qt Windows Platform Plugin | `plugins/platforms/libqwindows.a` | **Required on Windows** |
 | Qt SQLite Driver Plugin | `plugins/sqldrivers/libqsqlite.a` | Required for Qt SQL |
-| Qt Image Format Plugins | `plugins/imageformats/libqgif.a`, etc. | Optional: gif, ico, jpeg, svg, tiff, webp |
+| Qt Image Format Plugins | `plugins/imageformats/libq*.a` | gif, ico, jpeg, svg, etc. |
 | Qt SVG Icon Engine | `plugins/iconengines/libqsvgicon.a` | Required for SVG icons |
-| Qt Modern Windows Style | `plugins/styles/libqmodernwindowsstyle.a` | Optional: native Windows look |
+| Qt Modern Windows Style | `plugins/styles/libqmodernwindowsstyle.a` | Native Windows look |
 | SQLite3 | `libsqlite3.a` | Build from amalgamation |
-| SQLiteCpp | `libSQLiteCpp.a` | Build from vendored source |
+| SQLiteCpp | `libSQLiteCpp.a` | Built by build scripts from vendored source |
 | libsodium | `libsodium.a` | Build with `--disable-shared --enable-static` |
-| libgcc | (built-in) | Use `-static-libgcc` |
-| libstdc++ | (built-in) | Use `-static-libstdc++` |
 
 ### Static Plugin Linking (Windows)
 
@@ -395,20 +339,20 @@ Static Qt requires plugins to be explicitly imported. `main.cpp` includes:
 ```cpp
 #include <QtPlugin>
 #ifdef QT_STATICPLUGIN
-Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)   // Windows platform backend
-Q_IMPORT_PLUGIN(QSQLiteDriverPlugin)         // SQLite SQL driver
-Q_IMPORT_PLUGIN(QGifPlugin)                  // GIF image format
-Q_IMPORT_PLUGIN(QICOPlugin)                  // ICO image format
-Q_IMPORT_PLUGIN(QJpegPlugin)                 // JPEG image format
-Q_IMPORT_PLUGIN(QSvgPlugin)                  // SVG rendering
-Q_IMPORT_PLUGIN(QSvgIconPlugin)              // SVG icon engine
-Q_IMPORT_PLUGIN(QModernWindowsStylePlugin)   // Windows style
+Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
+Q_IMPORT_PLUGIN(QSQLiteDriverPlugin)
+Q_IMPORT_PLUGIN(QGifPlugin)
+Q_IMPORT_PLUGIN(QICOPlugin)
+Q_IMPORT_PLUGIN(QJpegPlugin)
+Q_IMPORT_PLUGIN(QSvgPlugin)
+Q_IMPORT_PLUGIN(QSvgIconPlugin)
+Q_IMPORT_PLUGIN(QModernWindowsStylePlugin)
 #endif
 ```
 
-Compile with `-DQT_STATICPLUGIN` and link against the corresponding `.a` files from `plugins/`. Use `-Wl,--start-group` and `-Wl,--end-group` around all Qt and plugin libraries to resolve circular dependencies.
+Compile with `-DQT_STATICPLUGIN`. Use `-Wl,--start-group` / `-Wl,--end-group` around all Qt and plugin libraries to resolve circular dependencies.
 
-Additional Windows SDK import libraries needed by the Qt platform plugin:
+Additional Windows SDK import libraries:
 `-ld3d11 -ld3d12 -ldxgi -ldwrite -lsetupapi -ld3d9 -lshcore -lwtsapi32 -lauthz -lmincore -lntdll -lnetapi32 -luserenv -ldbghelp`
 
 ---
@@ -420,18 +364,15 @@ Additional Windows SDK import libraries needed by the Qt platform plugin:
 After building, the only file needed is `QMark.exe`. No DLLs are required.
 
 ```bash
-# Create release zip
-cd src/app
-zip QMark-Windows-x64-$(date +%Y%m%d).zip QMark.exe
+zip QMark-Windows-x64-$(date +%Y%m%d).zip QMark-x64.exe
 ```
 
 ### Linux
 
-The static binary can be distributed as a single file. Optionally create a tarball:
+The static binary can be distributed as a single file:
 
 ```bash
-cd src/app
-tar czf QMark-Linux-x64-$(date +%Y%m%d).tar.gz QMark
+tar czf QMark-Linux-x64-$(date +%Y%m%d).tar.gz QMark-x64
 ```
 
 ---
@@ -450,25 +391,24 @@ tar czf QMark-Linux-x64-$(date +%Y%m%d).tar.gz QMark
 
 ### "Cannot find -lQt6Core" or similar
 
-Qt static libraries are not installed or not in the library path. Verify with:
+Qt static libraries not found. The build scripts search `deps/`, `~/`, and `/opt/`. Set `QT_DIR`:
 
 ```bash
-ls /opt/qt6-win64/lib/libQt6Core.a    # Windows cross-compile
-ls /opt/qt6-host/lib/libQt6Core.a     # Linux native
+QT_DIR=/your/path/to/qt6-static ./build-win-x64.sh
 ```
 
 ### "libgcc_s_sjlj-1.dll not found" (Windows)
 
-The binary was not statically linked. Add `-static-libgcc -static-libstdc++` to linker flags.
+Binary was not statically linked. Use the build scripts (they include `-static-libgcc -static-libstdc++`).
 
-### "sqlite3.h: No such file"
+### "ui_mainwindow.h: No such file"
 
-SQLite3 headers are not in the include path. Add `-I/path/to/sqlite3` to `INCLUDEPATH`.
+The `uic` tool wasn't found or failed. Set `QT_HOST_DIR` to your Qt host tools prefix.
 
-### Cross-compile: "tchar.h: No such file or directory"
+### Cross-compile: "tchar.h: No such file"
 
-Ensure the MinGW cross-compiler sysroot is correctly configured. The toolchain file should set `CMAKE_FIND_ROOT_PATH` to the MinGW sysroot.
+MinGW cross-compiler sysroot not configured. Ensure `mingw-w64` is installed.
 
 ### Qt configure: "Qt6HostInfo not found"
 
-When cross-compiling, Qt needs host tools built first. Follow Step 2 (build host tools) before Step 4 (cross-compile for target) in the Qt static build instructions above.
+Build Qt host tools (Step 2) before cross-compiling for target (Step 4).
