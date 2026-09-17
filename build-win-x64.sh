@@ -32,10 +32,33 @@ AR=x86_64-w64-mingw32-ar
 MOC="${QT_HOST_DIR:-/opt/qt6-host}/libexec/moc"
 
 # ── Dependency paths (override via environment) ───────────────────
-QT_DIR="${QT_DIR:-/opt/qt6-win64}"
-SQLITE3_DIR="${SQLITE3_DIR:-/opt/sqlite3}"
-SODIUM_DIR="${SODIUM_DIR:-/opt/libsodium-win64}"
-SQLITECPP_DIR="${SQLITECPP_DIR:-$SCRIPT_DIR/sqlitecpp}"
+# Auto-detect: check common locations in order
+find_dir() {
+    local desc="$1"; shift
+    for d in "$@"; do
+        if [ -d "$d" ]; then echo "$d"; return; fi
+    done
+    echo ""
+}
+
+QT_DIR="${QT_DIR:-$(find_dir "Qt6 static" \
+    /opt/qt6-win64 \
+    "$HOME/qmark-build/qt-static-win64" \
+    /home/sb3x/qmark-build/qt-static-win64 \
+    /tmp/qt6-win64)}"
+SQLITE3_DIR="${SQLITE3_DIR:-$(find_dir "SQLite3" \
+    /opt/sqlite3 \
+    "$HOME/qmark-build" \
+    /home/sb3x/qmark-build \
+    /tmp/sqlite3)}"
+SODIUM_DIR="${SODIUM_DIR:-$(find_dir "libsodium" \
+    /opt/libsodium-win64 \
+    "$HOME/qmark-build/sodium-win64" \
+    /home/sb3x/qmark-build/sodium-win64 \
+    /tmp/libsodium-win64)}"
+SQLITECPP_DIR="${SQLITECPP_DIR:-$(find_dir "SQLiteCpp" \
+    "$SCRIPT_DIR/sqlitecpp" \
+    "$SCRIPT_DIR")}"
 
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
@@ -80,9 +103,11 @@ fi
 MOC_PATH="${QT_HOST_DIR:-/opt/qt6-host}/libexec/moc"
 if [ ! -x "$MOC_PATH" ]; then
     # Try alternative locations
-    for candidate in /home/sb3x/qmark-build/qt-host-tools/libexec/moc \
-                     /opt/qt6-host/libexec/moc \
-                     "$(dirname "$QT_DIR")/qt-host-tools/libexec/moc"; do
+    for candidate in \
+        "$HOME/qmark-build/qt-host-tools/libexec/moc" \
+        /home/sb3x/qmark-build/qt-host-tools/libexec/moc \
+        /opt/qt6-host/libexec/moc \
+        "$QT_DIR/../qt-host-tools/libexec/moc"; do
         if [ -x "$candidate" ]; then
             MOC_PATH="$candidate"
             break
