@@ -130,6 +130,23 @@ find_moc() {
     done
 }
 
+find_uic() {
+    for d in \
+        "${QT_HOST_DIR:-}" \
+        "$SCRIPT_DIR/deps/qt6-host/bin" \
+        "$SCRIPT_DIR/deps/qt6-host/libexec" \
+        "$HOME/qt6-host/libexec" \
+        "$HOME/deps/qt6-host/libexec" \
+        /opt/qt6-host/libexec \
+        "$QT_DIR/../qt6-host/libexec" \
+        "$QT_DIR/../qt-host-tools/libexec"; do
+        [ -z "$d" ] && continue
+        for f in "$d/uic" "$d/qt6/uic"; do
+            [ -x "$f" ] && echo "$f" && return
+        done
+    done
+}
+
 MOC_PATH="$(find_moc)"
 if [ -z "$MOC_PATH" ]; then
     echo "ERROR: moc not found. Set QT_HOST_DIR to Qt host tools prefix." >&2
@@ -137,8 +154,15 @@ if [ -z "$MOC_PATH" ]; then
 fi
 echo "  MOC:         $MOC_PATH"
 
+UIC_PATH="$(find_uic)"
+if [ -z "$UIC_PATH" ]; then
+    echo "ERROR: uic not found. Set QT_HOST_DIR to Qt host tools prefix." >&2
+    exit 1
+fi
+echo "  UIC:         $UIC_PATH"
+
 # ── Prepare build directory ───────────────────────────────────────
-echo "[2/6] Preparing build directory..."
+echo "[2/7] Preparing build directory..."
 mkdir -p "$BUILD_DIR/obj"
 cd "$SRC_DIR"
 
@@ -154,8 +178,15 @@ CXXFLAGS="-std=c++17 -O2 -Wall -DWIN32 -DUNICODE -D_UNICODE -DMINGW_HAS_SECURE_A
   -I$SODIUM_DIR/include \
   -I$BUILD_DIR/obj"
 
+# ── Generate UI headers ───────────────────────────────────────────
+echo "[3/7] Generating UI headers..."
+"$UIC_PATH" mainwindow.ui -o "$BUILD_DIR/obj/ui_mainwindow.h" 2>&1
+# Also copy to app/ for #include "ui_mainwindow.h" resolution
+mkdir -p "$SRC_DIR/app"
+cp "$BUILD_DIR/obj/ui_mainwindow.h" "$SRC_DIR/app/ui_mainwindow.h"
+
 # ── Build SQLiteCpp static library ────────────────────────────────
-echo "[3/6] Building SQLiteCpp static library..."
+echo "[4/7] Building SQLiteCpp static library..."
 SQLITECPP_SRCS=$(find "$SQLITECPP_DIR/src" -name '*.cpp' -not -name '*test*' -not -name '*example*' | sort)
 
 if [ -z "$SQLITECPP_SRCS" ]; then
@@ -173,7 +204,7 @@ $AR rcs "$BUILD_DIR/obj/libSQLiteCpp.a" $SQLITECPP_OBJS
 echo "  libSQLiteCpp.a built ($(echo "$SQLITECPP_SRCS" | wc -l) files)"
 
 # ── Compile QMark sources ────────────────────────────────────────
-echo "[4/6] Compiling QMark sources..."
+echo "[5/7] Compiling QMark sources..."
 
 QMARK_SRCS=(
     businesslogic.cpp
@@ -199,7 +230,7 @@ $CXX $CXXFLAGS -c "$BUILD_DIR/obj/moc_mainwindow.cpp" -o "$BUILD_DIR/obj/moc_mai
 QMARK_OBJS="$QMARK_OBJS $BUILD_DIR/obj/moc_mainwindow.o"
 
 # ── Link ──────────────────────────────────────────────────────────
-echo "[5/6] Linking QMark.exe..."
+echo "[6/7] Linking QMark.exe..."
 
 rm -f "$BUILD_DIR/QMark.exe"
 
@@ -229,7 +260,7 @@ $CXX -static -static-libgcc -static-libstdc++ \
   -mwindows 2>&1
 
 # ── Verify and copy ──────────────────────────────────────────────
-echo "[6/6] Verifying..."
+echo "[7/7] Verifying..."
 if [ -f "$BUILD_DIR/QMark.exe" ]; then
     cp "$BUILD_DIR/QMark.exe" "$OUTPUT"
     echo ""
