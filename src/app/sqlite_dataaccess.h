@@ -42,6 +42,10 @@ public:
     std::vector<Domain::Sale> getSalesByUser(const std::string& userId) override;
     std::vector<Domain::Sale> searchSales(const std::string& term, const std::string& field) override;
 
+    // Daily statistics snapshots
+    bool upsertDailyStat(const Domain::DailyStat& stat) override;
+    std::vector<Domain::DailyStat> getDailyStats() override;
+
     // Category operations
     std::vector<Domain::Category> getAllCategories() override;
     bool addCategory(const Domain::Category& category) override;
@@ -74,6 +78,10 @@ private:
     Domain::Category rowToCategory(const SQLite::Statement& stmt);
     Domain::Shelf rowToShelf(const SQLite::Statement& stmt);
     Domain::User rowToUser(const SQLite::Statement& stmt);
+    Domain::DailyStat rowToDailyStat(const SQLite::Statement& stmt);
+    Domain::DailyStat dailyStatFor(const Domain::Sale& sale);
+    void upsertDailyStatLocked(const Domain::DailyStat& stat); // caller holds m_mutex
+    void rebuildDailyStatLocked(const std::string& day);       // caller holds m_mutex
     std::string dateTimeToString(const Domain::DateTime& dt);
     Domain::DateTime stringToDateTime(const std::string& str);
 

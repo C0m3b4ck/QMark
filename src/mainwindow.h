@@ -210,7 +210,7 @@ private:
 
     // ── POS Grid helpers ──────────────────────────────────────────
     void rebuildItemGrid(const std::vector<Domain::Item>& items);
-    QWidget* createItemCard(const Domain::Item& item);
+    QWidget* createItemCard(const Domain::Item& item, const QString& keyHint = QString());
     void refreshSellPage();
     void refreshSalesLog();
     void refreshSellStats();

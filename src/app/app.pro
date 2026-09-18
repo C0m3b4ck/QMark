@@ -28,6 +28,7 @@ HEADERS += \
     logger.h \
     mainwindow.h \
     sqlite_dataaccess.h \
+    statistics.h \
     telemetry.h \
     translations.h \
     worklog.h

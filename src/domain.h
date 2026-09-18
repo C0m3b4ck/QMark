@@ -115,6 +115,24 @@ struct Sale {
     }
 };
 
+// ── Daily statistics snapshot ─────────────────────────────────────
+// One row per LOCAL calendar day, persisted in the items database so
+// statistics survive even when the POS GUI is turned off during breaks.
+// It is maintained incrementally by the data layer on every sale, fully
+// independent of the GUI.
+struct DailyStat {
+    std::string day;             // local "yyyy-MM-dd"
+    int tx = 0;                  // transaction count
+    double revenue = 0.0;
+    int itemsSold = 0;           // total quantity sold
+    std::string bestSellerId;    // seller with the highest revenue
+    int bestSellerTx = 0;
+    double bestSellerRevenue = 0.0;
+    std::string bestItemId;      // item with the most units sold
+    int bestItemQty = 0;
+    double bestItemRevenue = 0.0;
+};
+
 // ── Category ──────────────────────────────────────────────────────
 
 struct Category {

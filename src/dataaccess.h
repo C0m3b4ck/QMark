@@ -49,6 +49,10 @@ public:
     virtual std::vector<Domain::Sale> getSalesByUser(const std::string& userId) = 0;
     virtual std::vector<Domain::Sale> searchSales(const std::string& term, const std::string& field) = 0;
 
+    // Daily statistics snapshots (persisted independently of the GUI)
+    virtual bool upsertDailyStat(const Domain::DailyStat& stat) = 0;
+    virtual std::vector<Domain::DailyStat> getDailyStats() = 0;
+
     // Category operations
     virtual std::vector<Domain::Category> getAllCategories() = 0;
     virtual bool addCategory(const Domain::Category& category) = 0;

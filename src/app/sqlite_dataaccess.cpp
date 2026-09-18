@@ -1,5 +1,6 @@
 #include "sqlite_dataaccess.h"
 #include "domain.h"
+#include "statistics.h"
 #include <SQLiteCpp/Database.h>
 #include <SQLiteCpp/Statement.h>
 #include <SQLiteCpp/Transaction.h>
@@ -7,6 +8,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <algorithm>
+#include <unordered_map>
 #include <QDebug>
 
 namespace DataAccess {
@@ -119,6 +121,23 @@ void SQLiteDataAccess::createTables()
             "CREATE TABLE IF NOT EXISTS shelves ("
             "id TEXT PRIMARY KEY,"
             "name TEXT NOT NULL UNIQUE"
+            ");"
+        );
+
+        // Daily statistics snapshots (kept in the items DB so they are
+        // persisted and available without any GUI running).
+        m_itemsDb->exec(
+            "CREATE TABLE IF NOT EXISTS tbl_daily_stats ("
+            "day TEXT PRIMARY KEY,"
+            "tx INTEGER NOT NULL DEFAULT 0,"
+            "revenue REAL NOT NULL DEFAULT 0,"
+            "itemsSold INTEGER NOT NULL DEFAULT 0,"
+            "bestSellerId TEXT DEFAULT '',"
+            "bestSellerTx INTEGER NOT NULL DEFAULT 0,"
+            "bestSellerRevenue REAL NOT NULL DEFAULT 0,"
+            "bestItemId TEXT DEFAULT '',"
+            "bestItemQty INTEGER NOT NULL DEFAULT 0,"
+            "bestItemRevenue REAL NOT NULL DEFAULT 0"
             ");"
         );
     }
@@ -489,6 +508,7 @@ bool SQLiteDataAccess::recordSale(const Domain::Sale& sale)
         query.bind(6, sale.soldBy);
         query.bind(7, dateTimeToString(sale.saleDate));
         query.exec();
+        upsertDailyStatLocked(dailyStatFor(sale));
         transaction.commit();
         return true;
     }
@@ -502,9 +522,19 @@ bool SQLiteDataAccess::deleteSale(const std::string& saleId)
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_itemsDb) return false;
     try {
+        // Remember the deleted sale's LOCAL calendar day so the persisted
+        // daily statistics snapshot can be rebuilt afterwards.
+        std::string dayToRebuild;
+        SQLite::Statement find(*m_itemsDb, "SELECT saleDate FROM sales WHERE id = ?");
+        find.bind(1, saleId);
+        if (find.executeStep()) {
+            Domain::DateTime dt = stringToDateTime(find.getColumn(0).getText());
+            dayToRebuild = Stats::localDay(dt);
+        }
         SQLite::Statement query(*m_itemsDb, "DELETE FROM sales WHERE id = ?");
         query.bind(1, saleId);
         query.exec();
+        if (!dayToRebuild.empty()) rebuildDailyStatLocked(dayToRebuild);
         return true;
     }
     catch (const std::exception&) {
@@ -568,6 +598,18 @@ bool SQLiteDataAccess::sellItemAtomic(const std::string& itemId, int quantity, d
             statusQuery.exec();
         }
 
+        // 4. Keep the daily statistics snapshot up to date (GUI-independent:
+        //    persisted at the data layer, so it survives the POS being off).
+        Domain::Sale newSale;
+        newSale.id = saleId;
+        newSale.itemId = itemId;
+        newSale.quantitySold = quantity;
+        newSale.unitPrice = unitPrice;
+        newSale.totalAmount = totalAmount;
+        newSale.soldBy = soldBy;
+        newSale.saleDate = Domain::now();
+        upsertDailyStatLocked(dailyStatFor(newSale));
+
         transaction.commit();
         return true;
     }
@@ -589,6 +631,196 @@ std::vector<Domain::Sale> SQLiteDataAccess::getAllSales()
         sales.push_back(rowToSale(query));
     }
     return sales;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Daily statistics snapshots
+// ═══════════════════════════════════════════════════════════════════
+
+Domain::DailyStat SQLiteDataAccess::rowToDailyStat(const SQLite::Statement& stmt)
+{
+    Domain::DailyStat st;
+    st.day = stmt.getColumn(0).getText();
+    st.tx = stmt.getColumn(1).getInt();
+    st.revenue = stmt.getColumn(2).getDouble();
+    st.itemsSold = stmt.getColumn(3).getInt();
+    st.bestSellerId = stmt.getColumn(4).getText();
+    st.bestSellerTx = stmt.getColumn(5).getInt();
+    st.bestSellerRevenue = stmt.getColumn(6).getDouble();
+    st.bestItemId = stmt.getColumn(7).getText();
+    st.bestItemQty = stmt.getColumn(8).getInt();
+    st.bestItemRevenue = stmt.getColumn(9).getDouble();
+    return st;
+}
+
+// Per-sale delta used to update the persisted daily snapshot.
+Domain::DailyStat SQLiteDataAccess::dailyStatFor(const Domain::Sale& sale)
+{
+    Domain::DailyStat st;
+    st.day = Stats::localDay(sale);
+    st.tx = 1;
+    st.revenue = sale.totalAmount;
+    st.itemsSold = sale.quantitySold;
+    st.bestSellerId = sale.soldBy;
+    st.bestSellerTx = 1;
+    st.bestSellerRevenue = sale.totalAmount;
+    st.bestItemId = sale.itemId;
+    st.bestItemQty = sale.quantitySold;
+    st.bestItemRevenue = sale.totalAmount;
+    return st;
+}
+
+// Aggregates a sale's delta into the daily row (best seller = highest
+// daily revenue, best item = most units sold that day). Caller holds
+// m_mutex; safe to call inside an existing transaction.
+void SQLiteDataAccess::upsertDailyStatLocked(const Domain::DailyStat& stat)
+{
+    if (!m_itemsDb) return;
+    try {
+        SQLite::Statement q(*m_itemsDb,
+            "INSERT INTO tbl_daily_stats "
+            "(day, tx, revenue, itemsSold, bestSellerId, bestSellerTx, bestSellerRevenue, "
+            " bestItemId, bestItemQty, bestItemRevenue) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(day) DO UPDATE SET "
+            "tx = tx + excluded.tx, "
+            "revenue = revenue + excluded.revenue, "
+            "itemsSold = itemsSold + excluded.itemsSold, "
+            "bestSellerId = CASE WHEN excluded.bestSellerRevenue > bestSellerRevenue "
+            "                    THEN excluded.bestSellerId ELSE bestSellerId END, "
+            "bestSellerTx = CASE WHEN excluded.bestSellerRevenue > bestSellerRevenue "
+            "                    THEN excluded.bestSellerTx ELSE bestSellerTx END, "
+            "bestSellerRevenue = MAX(bestSellerRevenue, excluded.bestSellerRevenue), "
+            "bestItemId = CASE WHEN excluded.bestItemQty > bestItemQty "
+            "                  THEN excluded.bestItemId ELSE bestItemId END, "
+            "bestItemQty = MAX(bestItemQty, excluded.bestItemQty), "
+            "bestItemRevenue = CASE WHEN excluded.bestItemQty > bestItemQty "
+            "                       THEN excluded.bestItemRevenue ELSE bestItemRevenue END");
+        q.bind(1, stat.day);
+        q.bind(2, stat.tx);
+        q.bind(3, stat.revenue);
+        q.bind(4, stat.itemsSold);
+        q.bind(5, stat.bestSellerId);
+        q.bind(6, stat.bestSellerTx);
+        q.bind(7, stat.bestSellerRevenue);
+        q.bind(8, stat.bestItemId);
+        q.bind(9, stat.bestItemQty);
+        q.bind(10, stat.bestItemRevenue);
+        q.exec();
+    }
+    catch (const std::exception&) {
+        // A failing snapshot must never break the sale itself.
+    }
+}
+
+bool SQLiteDataAccess::upsertDailyStat(const Domain::DailyStat& stat)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    upsertDailyStatLocked(stat);
+    return true;
+}
+
+// Recomputed a day's snapshot from the sales that are actually in the
+// DB (used when a sale is deleted/undone). Best seller = highest daily
+// revenue, best item = most units sold that day. Caller holds m_mutex.
+void SQLiteDataAccess::rebuildDailyStatLocked(const std::string& day)
+{
+    if (!m_itemsDb || day.empty()) return;
+    try {
+        Domain::DailyStat st;
+        st.day = day;
+        std::unordered_map<std::string, int> itemQty;
+        std::unordered_map<std::string, double> itemRev;
+        std::unordered_map<std::string, std::pair<int, double>> sellerAgg;
+
+        SQLite::Statement q(*m_itemsDb,
+            "SELECT id, itemId, quantitySold, unitPrice, totalAmount, soldBy, saleDate "
+            "FROM sales");
+        while (q.executeStep()) {
+            Domain::Sale s = rowToSale(q);
+            if (Stats::localDay(s) != day) continue;
+            st.tx++;
+            st.revenue += s.totalAmount;
+            st.itemsSold += s.quantitySold;
+            itemQty[s.itemId] += s.quantitySold;
+            itemRev[s.itemId] += s.totalAmount;
+            auto& ag = sellerAgg[s.soldBy];
+            ag.first++;
+            ag.second += s.totalAmount;
+        }
+
+        if (st.tx == 0) {
+            // No sales left that day — drop the snapshot entirely.
+            SQLite::Statement d(*m_itemsDb, "DELETE FROM tbl_daily_stats WHERE day = ?");
+            d.bind(1, day);
+            d.exec();
+            return;
+        }
+
+        // Deterministic tie-break: on equal revenue/qty the lowest id wins,
+        // so repeated rebuilds always produce the same snapshot.
+        std::vector<std::string> sellerIds;
+        for (const auto& kv : sellerAgg) sellerIds.push_back(kv.first);
+        std::sort(sellerIds.begin(), sellerIds.end());
+        for (const auto& id : sellerIds) {
+            const auto& kv = sellerAgg.find(id);
+            if (kv->second.second > st.bestSellerRevenue) {
+                st.bestSellerRevenue = kv->second.second;
+                st.bestSellerId = kv->first;
+                st.bestSellerTx = kv->second.first;
+            }
+        }
+        std::vector<std::string> itemIds;
+        for (const auto& kv : itemQty) itemIds.push_back(kv.first);
+        std::sort(itemIds.begin(), itemIds.end());
+        for (const auto& id : itemIds) {
+            const int qty = itemQty.at(id);
+            if (qty > st.bestItemQty) {
+                st.bestItemQty = qty;
+                st.bestItemId = id;
+                st.bestItemRevenue = itemRev.count(id) ? itemRev.at(id) : 0.0;
+            }
+        }
+
+        SQLite::Statement ins(*m_itemsDb,
+            "INSERT OR REPLACE INTO tbl_daily_stats "
+            "(day, tx, revenue, itemsSold, bestSellerId, bestSellerTx, bestSellerRevenue, "
+            " bestItemId, bestItemQty, bestItemRevenue) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        ins.bind(1, st.day);
+        ins.bind(2, st.tx);
+        ins.bind(3, st.revenue);
+        ins.bind(4, st.itemsSold);
+        ins.bind(5, st.bestSellerId);
+        ins.bind(6, st.bestSellerTx);
+        ins.bind(7, st.bestSellerRevenue);
+        ins.bind(8, st.bestItemId);
+        ins.bind(9, st.bestItemQty);
+        ins.bind(10, st.bestItemRevenue);
+        ins.exec();
+    }
+    catch (const std::exception&) {
+        // A failing snapshot must never break the undo itself.
+    }
+}
+
+std::vector<Domain::DailyStat> SQLiteDataAccess::getDailyStats()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<Domain::DailyStat> stats;
+    if (!m_itemsDb) return stats;
+    try {
+        SQLite::Statement query(*m_itemsDb,
+            "SELECT day, tx, revenue, itemsSold, bestSellerId, bestSellerTx, "
+            "bestSellerRevenue, bestItemId, bestItemQty, bestItemRevenue "
+            "FROM tbl_daily_stats ORDER BY day DESC");
+        while (query.executeStep()) {
+            stats.push_back(rowToDailyStat(query));
+        }
+    }
+    catch (const std::exception&) {
+    }
+    return stats;
 }
 
 std::vector<Domain::Sale> SQLiteDataAccess::getSalesForItem(const std::string& itemId)
