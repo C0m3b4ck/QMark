@@ -21,6 +21,7 @@ SOURCES += \
 
 HEADERS += \
     businesslogic.h \
+    charts.h \
     crypto.h \
     dataaccess.h \
     domain.h \

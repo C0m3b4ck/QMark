@@ -1419,7 +1419,7 @@
           <property name="minimumSize">
            <size>
             <width>0</width>
-            <height>190</height>
+            <height>260</height>
            </size>
           </property>
           <property name="visible">
@@ -1502,6 +1502,37 @@
               </font>
              </property>
             </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblSoldLines_sell">
+             <property name="text">
+              <string>No sales today.</string>
+             </property>
+             <property name="font">
+              <font>
+               <pointsize>11</pointsize>
+              </font>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+             <property name="styleSheet">
+              <string notr="true">color: #444444;</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="statsSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>10</height>
+              </size>
+             </property>
+            </spacer>
            </item>
           </layout>
          </widget>
@@ -1995,17 +2026,33 @@
          </layout>
         </item>
         <item>
-         <widget class="QTextEdit" name="txtReport">
-          <property name="readOnly">
-           <bool>true</bool>
-          </property>
-          <property name="font">
-           <font>
-            <pointsize>12</pointsize>
-            <family>monospace</family>
-           </font>
-          </property>
-         </widget>
+         <layout class="QHBoxLayout" name="reportBodyLayout">
+          <item>
+           <widget class="QTextEdit" name="txtReport">
+            <property name="readOnly">
+             <bool>true</bool>
+            </property>
+            <property name="font">
+             <font>
+              <pointsize>12</pointsize>
+              <family>monospace</family>
+             </font>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QWidget" name="reportChartsContainer" native="true">
+            <property name="minimumSize">
+             <size>
+              <width>300</width>
+              <height>0</height>
+             </size>
+            </property>
+            <layout class="QVBoxLayout" name="reportChartsLayout">
+            </layout>
+           </widget>
+          </item>
+         </layout>
         </item>
        </layout>
       </widget>

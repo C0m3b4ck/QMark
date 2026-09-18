@@ -6,6 +6,7 @@
 #include "logger.h"
 #include "telemetry.h"
 #include "translations.h"
+#include "charts.h"
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -48,6 +49,24 @@ static QString fmtMoney(double value)
         return QLocale(QLocale::Polish).toCurrencyString(value, "zł");
     }
     return QLocale(QLocale::English).toCurrencyString(value, "$");
+}
+
+// ── Local calendar helpers for sale timestamps ─────────────────────
+// Stored timestamps are UTC ISO ("...T17:30:00Z"); convert to the user's
+// local date/hour so "today", "yesterday" and the activity chart match
+// what the shop actually experiences.
+static QString saleDay(const Domain::Sale& s)
+{
+    return QDateTime::fromString(
+        QString::fromStdString(Domain::toISOString(s.saleDate)), Qt::ISODate)
+        .toLocalTime().date().toString("yyyy-MM-dd");
+}
+
+static int saleHour(const Domain::Sale& s)
+{
+    return QDateTime::fromString(
+        QString::fromStdString(Domain::toISOString(s.saleDate)), Qt::ISODate)
+        .toLocalTime().time().hour();
 }
 
 // ── Localized list-row text (UI side) ───────────────────────────────
@@ -1486,15 +1505,23 @@ void MainWindow::refreshSellStats()
     std::map<QString, double> revByItem;
     QString topId;
     int topQty = 0;
+    QStringList soldLines;              // one simple line per sale
+
+    std::unordered_map<std::string, std::string> names;
+    for (const auto& it : items) names[it.id] = it.name;
 
     for (const auto& s : sales) {
-        QString date = QString::fromStdString(Domain::toISOString(s.saleDate)).left(10);
-        if (date != today) continue;
+        if (saleDay(s) != today) continue;
         transactions++;
         revenue += s.totalAmount;
         itemsSold += s.quantitySold;
         qtyByItem[QString::fromStdString(s.itemId)] += s.quantitySold;
         revByItem[QString::fromStdString(s.itemId)] += s.totalAmount;
+
+        // "sold Krakersy for 12,00 zł" — one simple line per sale.
+        QString name = QString::fromStdString(names.count(s.itemId) ? names[s.itemId] : s.itemId);
+        if (s.quantitySold > 1) name = QString::number(s.quantitySold) + "× " + name;
+        soldLines << QString(Tr::trS("sold %1 for %2")).arg(name).arg(fmtMoney(s.totalAmount));
     }
     for (auto it = qtyByItem.begin(); it != qtyByItem.end(); ++it) {
         if (it->second > topQty) { topQty = it->second; topId = it->first; }
@@ -1514,14 +1541,18 @@ void MainWindow::refreshSellStats()
     ui->lblStatRevenue_sell->setText(Tr::trS("Revenue: ") + fmtMoney(revenue));
     ui->lblStatItems_sell->setText(Tr::trS("Items sold: ") + QString::number(itemsSold));
     ui->lblStatTop_sell->setText(Tr::trS("Top item: ") + topName);
+    if (ui->lblSoldLines_sell) {
+        ui->lblSoldLines_sell->setText(soldLines.isEmpty()
+            ? Tr::trS("No sales today.")
+            : soldLines.join("\n"));
+    }
 
-    // Trend vs yesterday (UTC dates, same as sale timestamps).
+    // Trend vs yesterday (local calendar days).
     QString trend = Tr::trS("Trend: -");
     double yRevenue = 0.0;
     QString yesterday = QDate::currentDate().addDays(-1).toString("yyyy-MM-dd");
     for (const auto& s : sales) {
-        QString date = QString::fromStdString(Domain::toISOString(s.saleDate)).left(10);
-        if (date == yesterday) yRevenue += s.totalAmount;
+        if (saleDay(s) == yesterday) yRevenue += s.totalAmount;
     }
     if (yRevenue > 0.0) {
         double pct = ((revenue - yRevenue) / yRevenue) * 100.0;
@@ -2221,8 +2252,14 @@ void MainWindow::on_btnGenerateReport_clicked()
     int totalItemsSold = 0;
     std::map<QString, int> qtyByItem;          // itemId -> qty
     std::map<QString, double> revByItem;       // itemId -> revenue
-    std::map<QString, double> revByDay;        // "yyyy-MM-dd" -> revenue
+    std::map<QString, double> revByDay;        // local "yyyy-MM-dd" -> revenue
     std::map<std::string, std::pair<int, double>> bySeller; // sellerId -> (tx, revenue)
+    std::map<QString, int> qtyToday;           // itemId -> qty sold today
+    std::map<std::string, std::pair<int, double>> bySellerToday;
+    int hourCount[24] = { 0 };
+    int hourCountToday[24] = { 0 };
+
+    QString today = QDate::currentDate().toString("yyyy-MM-dd");
 
     for (const auto& s : sales) {
         totalRevenue += s.totalAmount;
@@ -2230,10 +2267,20 @@ void MainWindow::on_btnGenerateReport_clicked()
         QString iid = QString::fromStdString(s.itemId);
         qtyByItem[iid] += s.quantitySold;
         revByItem[iid] += s.totalAmount;
-        revByDay[QString::fromStdString(Domain::toISOString(s.saleDate)).left(10)] += s.totalAmount;
+        revByDay[saleDay(s)] += s.totalAmount;
         auto& sel = bySeller[s.soldBy];
         sel.first++;
         sel.second += s.totalAmount;
+        int h = saleHour(s);
+        if (h >= 0 && h < 24) hourCount[h]++;
+
+        if (saleDay(s) == today) {
+            qtyToday[iid] += s.quantitySold;
+            auto& st = bySellerToday[s.soldBy];
+            st.first++;
+            st.second += s.totalAmount;
+            if (h >= 0 && h < 24) hourCountToday[h]++;
+        }
     }
 
     QString report;
@@ -2255,6 +2302,58 @@ void MainWindow::on_btnGenerateReport_clicked()
     report += Tr::trS("Low Stock: ") + QString::number(lowStock) + "\n";
     report += Tr::trS("Out of Stock: ") + QString::number(outOfStock) + "\n\n";
 
+    // ── Today's statistics (who did most, etc.) ────────────────
+    report += "───────────────────────────────────────\n";
+    report += Tr::trS("TODAY'S STATISTICS") + "\n";
+    report += "───────────────────────────────────────\n";
+    double todayRevenue = 0.0;
+    int todayTx = 0, todayItems = 0;
+    for (const auto& s : sales) {
+        if (saleDay(s) != today) continue;
+        todayRevenue += s.totalAmount;
+        todayTx++;
+        todayItems += s.quantitySold;
+    }
+    report += Tr::trS("Today's Sales: ") + QString::number(todayTx) + "\n";
+    report += Tr::trS("Today's Revenue: ") + fmtMoney(todayRevenue) + "\n";
+    report += Tr::trS("Today's Items Sold: ") + QString::number(todayItems) + "\n";
+
+    // Today's top seller ("who did most")
+    QString topSellerToday = "-";
+    if (!bySellerToday.empty()) {
+        std::vector<std::pair<std::string, std::pair<int, double>>> sToday(bySellerToday.begin(), bySellerToday.end());
+        std::sort(sToday.begin(), sToday.end(),
+            [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+        const auto& best = sToday.front();
+        topSellerToday = (userNames.count(best.first) ? QString::fromStdString(userNames[best.first])
+                                                      : QString::fromStdString(best.first))
+                       + " — " + QString::number(best.second.first) + " " + Tr::trS("tx, ")
+                       + fmtMoney(best.second.second);
+    }
+    report += Tr::trS("Today's Top Seller: ") + topSellerToday + "\n";
+
+    // Today's top item
+    QString topItemToday = "-";
+    if (!qtyToday.empty()) {
+        QString bestId = qtyToday.begin()->first;
+        for (auto it = qtyToday.begin(); it != qtyToday.end(); ++it)
+            if (it->second > qtyToday[bestId]) bestId = it->first;
+        topItemToday = (itemNames.count(bestId.toStdString()) ? QString::fromStdString(itemNames[bestId.toStdString()])
+                                                              : bestId)
+                     + " — " + QString::number(qtyToday[bestId]) + " " + Tr::trS("pcs");
+    }
+    report += Tr::trS("Today's Top Item: ") + topItemToday + "\n";
+
+    // Today's busiest hour (activity peak)
+    QString busiestHour = "-";
+    int peak = 0;
+    for (int h = 0; h < 24; ++h)
+        if (hourCountToday[h] > peak) { peak = hourCountToday[h]; busiestHour = QString("%1:00").arg(h); }
+    if (peak == 0) busiestHour = "-";
+    report += Tr::trS("Today's Busiest Hour: ") + busiestHour
+            + (peak > 0 ? " (" + QString::number(peak) + " " + Tr::trS("sales") + ")" : QString()) + "\n";
+    report += "\n";
+
     // ── Trends ─────────────────────────────────────────────────
     report += "───────────────────────────────────────\n";
     report += Tr::trS("TRENDS") + "\n";
@@ -2262,22 +2361,22 @@ void MainWindow::on_btnGenerateReport_clicked()
 
     // Revenue trend: last 7 days
     report += Tr::trS("Revenue by day (last 7 days):") + "\n";
-    QDate todayUtc = QDate::currentDate();
+    QDate todayLocal = QDate::currentDate();
     bool anyDay = false;
     for (int d = 6; d >= 0; --d) {
-        QString day = todayUtc.addDays(-d).toString("yyyy-MM-dd");
+        QString day = todayLocal.addDays(-d).toString("yyyy-MM-dd");
         double dayRev = revByDay[day];
         if (dayRev <= 0.0 && d != 0) continue;
         anyDay = true;
         report += QString("  %1  %2\n").arg(day).arg(dayRev > 0.0 ? fmtMoney(dayRev) : fmtMoney(0.0));
     }
     if (!anyDay && revByDay.empty()) report += Tr::trS("  (no sales recorded yet)") + "\n";
-    double yRev = revByDay[todayUtc.addDays(-1).toString("yyyy-MM-dd")];
-    if (yRev > 0.0 && revByDay[todayUtc.toString("yyyy-MM-dd")] > 0.0) {
-        double pct = ((revByDay[todayUtc.toString("yyyy-MM-dd")] - yRev) / yRev) * 100.0;
+    double yRev = revByDay[todayLocal.addDays(-1).toString("yyyy-MM-dd")];
+    if (yRev > 0.0 && revByDay[todayLocal.toString("yyyy-MM-dd")] > 0.0) {
+        double pct = ((revByDay[todayLocal.toString("yyyy-MM-dd")] - yRev) / yRev) * 100.0;
         report += Tr::trS("Trend vs yesterday: ") + QString("%1%").arg(pct, 0, 'f', 1) +
                   (pct >= 0.0 ? " " + Tr::trS("(up)") : " " + Tr::trS("(down)")) + "\n";
-    } else if (revByDay[todayUtc.toString("yyyy-MM-dd")] > 0.0) {
+    } else if (revByDay[todayLocal.toString("yyyy-MM-dd")] > 0.0) {
         report += Tr::trS("Trend: no sales yesterday (new activity today)") + "\n";
     }
     report += "\n";
@@ -2329,6 +2428,54 @@ void MainWindow::on_btnGenerateReport_clicked()
 
     if (ui->txtReport) {
         ui->txtReport->setText(report);
+    }
+
+    // ── Statistics charts ───────────────────────────────────────
+    if (ui->reportChartsContainer) {
+        // Clear any previously generated charts.
+        QLayout* lay = ui->reportChartsContainer->layout();
+        while (lay && lay->count() > 0) {
+            QLayoutItem* it = lay->takeAt(0);
+            if (it->widget()) it->widget()->deleteLater();
+            delete it;
+        }
+
+        // Pie: which items were sold the most (top 8 + "Other").
+        auto* pie = new PieChartWidget;
+        pie->setTitle(Tr::trS("Top Selling Items"));
+        QVector<QPair<QString, double>> pieData;
+        if (!qtyByItem.empty()) {
+            std::vector<std::pair<QString, int>> ranked(qtyByItem.begin(), qtyByItem.end());
+            std::sort(ranked.begin(), ranked.end(),
+                [](const auto& a, const auto& b) { return a.second > b.second; });
+            double other = 0.0;
+            int shown = 0;
+            for (const auto& p : ranked) {
+                if (++shown <= 8) {
+                    QString name = itemNames.count(p.first.toStdString())
+                        ? QString::fromStdString(itemNames[p.first.toStdString()]) : p.first;
+                    pieData << QPair<QString, double>(name, double(p.second));
+                } else {
+                    other += p.second;
+                }
+            }
+            if (other > 0.0) pieData << QPair<QString, double>(Tr::trS("Other"), other);
+        }
+        pie->setData(pieData);
+        lay->addWidget(pie);
+
+        // Bar: shop activity by hour of day (local time).
+        auto* bar = new BarChartWidget;
+        bar->setTitle(Tr::trS("Shop activity by hour"));
+        QVector<double> barVals;
+        QStringList barLabels;
+        for (int h = 0; h < 24; ++h) {
+            barVals << double(hourCount[h]);
+            if (h % 4 == 0) barLabels << QString("%1:00").arg(h);
+            else            barLabels << QString();
+        }
+        bar->setData(barVals, barLabels, 4);
+        lay->addWidget(bar);
     }
 }
 

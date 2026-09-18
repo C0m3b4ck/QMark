@@ -142,6 +142,8 @@ inline const QHash<QString, QString>& plDict()
         { "Trend: ", "Trend: " },
         { "vs yesterday", "w porównaniu z wczoraj" },
         { "no sales yesterday", "brak sprzedaży wczoraj" },
+        { "sold %1 for %2", "Sprzedano %1 za %2" },
+        { "No sales today.", "Brak dzisiejszych sprzedaży." },
 
         // ── Categories page ──────────────────────────────────────
         { "Category Name", "Nazwa kategorii" },
@@ -177,9 +179,20 @@ inline const QHash<QString, QString>& plDict()
         { "(no sales yet)", "(brak sprzedaży)" },
         { "(no sales recorded yet)", "(brak zarejestrowanych sprzedaży)" },
         { "pcs, ", "szt., " },
+        { "pcs", "szt." },
         { "Top sellers (staff):", "Najlepsi sprzedawcy (personel):" },
         { "tx, ", "trans., " },
         { "Low stock items needing replenishment:", "Przedmioty o niskim stanie wymagające uzupełnienia:" },
+        { "Today's Sales: ", "Dzisiejsza sprzedaż: " },
+        { "Today's Revenue: ", "Dzisiejszy przychód: " },
+        { "Today's Items Sold: ", "Dzisiejsze sprzedane sztuki: " },
+        { "Today's Top Seller: ", "Dzisiejszy najlepszy sprzedawca: " },
+        { "Today's Top Item: ", "Dzisiejszy najlepszy przedmiot: " },
+        { "Today's Busiest Hour: ", "Dzisiejsza godzina szczytu: " },
+        { "sales", "sprzedaży" },
+        { "Top Selling Items", "Najlepiej sprzedające się przedmioty" },
+        { "Shop activity by hour", "Aktywność sklepu wg godziny" },
+        { "Other", "Inne" },
 
         // ── Database config ───────────────────────────────────────
         { "Items Database", "Baza danych przedmiotów" },
