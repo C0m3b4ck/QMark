@@ -1390,6 +1390,94 @@
           </widget>
          </widget>
         </item>
+        <item>
+         <widget class="QCheckBox" name="chkKeybinds_sell">
+          <property name="text">
+           <string>Enable sell keybinds (Alt+1-9, Alt+0, Alt+letters, arrows, Enter)</string>
+          </property>
+          <property name="font">
+           <font>
+            <pointsize>12</pointsize>
+           </font>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="frameSalesLog_sell">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>190</height>
+           </size>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">QFrame { background: white; border: 1px solid #e0e0e0; border-radius: 8px; }</string>
+          </property>
+          <layout class="QVBoxLayout" name="salesLogLayout">
+           <item>
+            <layout class="QHBoxLayout" name="salesLogHeaderLayout">
+             <item>
+              <widget class="QLabel" name="lblSalesLog_sell">
+               <property name="text">
+                <string>Sales log</string>
+               </property>
+               <property name="font">
+                <font>
+                 <pointsize>13</pointsize>
+                 <weight>75</weight>
+                 <bold>true</bold>
+                </font>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="salesLogHeaderSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnRefreshSalesLog_sell">
+               <property name="text">
+                <string>Refresh</string>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>90</width>
+                 <height>32</height>
+                </size>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btnUndoSale_sell">
+               <property name="text">
+                <string>Undo Sale</string>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>110</width>
+                 <height>32</height>
+                </size>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">QPushButton { background-color: #c62828; color: white; border: none; border-radius: 6px; } QPushButton:hover { background-color: #8e0000; }</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QListWidget" name="lstSalesLog_sell">
+             <property name="styleSheet">
+              <string notr="true">QListWidget { background: white; border: none; font-size: 12px; }</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
        </layout>
       </widget>
 
@@ -2053,6 +2141,127 @@
          </widget>
         </item>
         <item>
+         <layout class="QHBoxLayout" name="prefLangLayout">
+          <item>
+           <widget class="QLabel" name="lblLanguage_pref">
+            <property name="text">
+             <string>Language</string>
+            </property>
+            <property name="font">
+             <font>
+              <pointsize>13</pointsize>
+             </font>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="cboLanguage_pref">
+            <property name="minimumSize">
+             <size>
+              <width>220</width>
+              <height>34</height>
+             </size>
+            </property>
+            <item>
+             <property name="text">
+              <string>English</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Polski</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <spacer name="prefLangSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="prefCurrLayout">
+          <item>
+           <widget class="QLabel" name="lblCurrency_pref">
+            <property name="text">
+             <string>Currency</string>
+            </property>
+            <property name="font">
+             <font>
+              <pointsize>13</pointsize>
+             </font>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="cboCurrency_pref">
+            <property name="minimumSize">
+             <size>
+              <width>220</width>
+              <height>34</height>
+             </size>
+            </property>
+            <item>
+             <property name="text">
+              <string>PLN (zł)</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>USD ($)</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="lblCurrencyHint_pref">
+            <property name="text">
+             <string>Switching currency does not convert prices.</string>
+            </property>
+            <property name="styleSheet">
+             <string notr="true">color: #666; font-size: 12px;</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="prefCurrSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="chkKeybinds_pref">
+          <property name="text">
+           <string>Enable sell keybinds</string>
+          </property>
+          <property name="font">
+           <font>
+            <pointsize>13</pointsize>
+           </font>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnConvertPrices_pref">
+          <property name="text">
+           <string>Convert All Prices...</string>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>200</width>
+            <height>40</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
          <layout class="QHBoxLayout" name="prefBtnLayout">
           <item>
            <widget class="QPushButton" name="btnSavePreferences">
@@ -2570,7 +2779,7 @@
     <property name="title">
      <string>Items</string>
     </property>
-    <addaction name="actionSell_Item"/>
+    <addaction name="actionResupply"/>
     <addaction name="separator"/>
     <addaction name="actionAdd_Items"/>
     <addaction name="actionEdit_Items"/>
@@ -2579,6 +2788,19 @@
     <addaction name="separator"/>
     <addaction name="actionManage_Categories"/>
     <addaction name="actionManage_Shelves"/>
+   </widget>
+   <widget class="QMenu" name="menuSell">
+    <property name="title">
+     <string>Sell</string>
+    </property>
+    <addaction name="actionSell_Item"/>
+   </widget>
+   <widget class="QMenu" name="menuLanguage">
+    <property name="title">
+     <string>Language</string>
+    </property>
+    <addaction name="actionLanguageEnglish"/>
+    <addaction name="actionLanguagePolish"/>
    </widget>
    <widget class="QMenu" name="menuSales">
     <property name="title">
@@ -2600,6 +2822,8 @@
     <addaction name="actionTroubleshoot"/>
    </widget>
    <addaction name="menuFile"/>
+   <addaction name="menuSell"/>
+   <addaction name="menuLanguage"/>
    <addaction name="menuItems"/>
    <addaction name="menuSales"/>
    <addaction name="menuTools"/>
@@ -2619,6 +2843,22 @@
   <action name="actionLog_in">
    <property name="text">
     <string>Log In</string>
+   </property>
+  </action>
+  <action name="actionLanguageEnglish">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>English</string>
+   </property>
+  </action>
+  <action name="actionLanguagePolish">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Polski</string>
    </property>
   </action>
   <action name="actionRegister">
@@ -2699,6 +2939,11 @@
   <action name="actionTroubleshoot">
    <property name="text">
     <string>Troubleshoot</string>
+   </property>
+  </action>
+  <action name="actionResupply">
+   <property name="text">
+    <string>Resupply</string>
    </property>
   </action>
  </widget>

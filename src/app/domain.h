@@ -9,6 +9,20 @@
 
 namespace Domain {
 
+// ── Currency / price formatting ─────────────────────────────────────
+// The default currency is PLN (polski złoty). The symbol is a plain
+// global so the (header-only) domain layer can format prices without
+// depending on QSettings. The app calls setCurrencySymbol() from the
+// settings (SuperAdmin-only currency switch in Preferences).
+inline std::string& currencySymbol() {
+    static std::string sym = "zł";
+    return sym;
+}
+
+inline void setCurrencySymbol(const std::string& sym) {
+    currencySymbol() = sym;
+}
+
 using DateTime = std::chrono::system_clock::time_point;
 
 inline DateTime now() {
@@ -69,7 +83,15 @@ struct Item {
     static std::string formatPrice(double p) {
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(2) << p;
-        return oss.str();
+        std::string num = oss.str();
+        if (currencySymbol() == "zł") {
+            // Polish convention: comma decimal separator, symbol after the number
+            for (auto& c : num) {
+                if (c == '.') c = ',';
+            }
+            return num + " zł";
+        }
+        return "$" + num;
     }
 };
 
@@ -87,7 +109,7 @@ struct Sale {
     std::string toDisplayString() const {
         return "Sale " + id + " | Item: " + itemId +
                " | Qty: " + std::to_string(quantitySold) +
-               " | $" + Item::formatPrice(totalAmount) +
+               " | " + Item::formatPrice(totalAmount) +
                " | By: " + soldBy +
                " | " + Domain::toISOString(saleDate);
     }
@@ -178,7 +200,7 @@ struct ItemDTO {
 
     std::string toDisplayString() const {
         return name + " | Qty: " + std::to_string(quantity) +
-               " | $" + Domain::Item::formatPrice(price) +
+               " | " + Domain::Item::formatPrice(price) +
                " | " + status +
                " | Shelf: " + shelf +
                " | Cat: " + category +

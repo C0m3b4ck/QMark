@@ -28,6 +28,7 @@ HEADERS += \
     mainwindow.h \
     sqlite_dataaccess.h \
     telemetry.h \
+    translations.h \
     worklog.h
 
 FORMS += \

@@ -7,6 +7,9 @@
 #include <QDateTime>
 #include <QSettings>
 #include <QDir>
+#include <QStyleFactory>
+#include <QPalette>
+#include <QColor>
 #include <QtPlugin>
 #include <cstdlib>
 
@@ -29,6 +32,27 @@ static void cleanupLogger() {
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+
+    // ── Force Fusion style + explicit light palette ─────────────────
+    // Fixes "invisible" (white-on-white) text on some platforms,
+    // e.g. Windows 11 with dark-mode/auto palette in the default style.
+    QApplication::setStyle(QStyleFactory::create("Fusion"));
+    {
+        QPalette pal = a.palette();
+        pal.setColor(QPalette::Window, QColor(245, 245, 245));
+        pal.setColor(QPalette::WindowText, QColor(0, 0, 0));
+        pal.setColor(QPalette::Base, QColor(255, 255, 255));
+        pal.setColor(QPalette::AlternateBase, QColor(240, 240, 240));
+        pal.setColor(QPalette::ToolTipBase, QColor(255, 255, 220));
+        pal.setColor(QPalette::ToolTipText, QColor(0, 0, 0));
+        pal.setColor(QPalette::Text, QColor(0, 0, 0));
+        pal.setColor(QPalette::Button, QColor(230, 230, 230));
+        pal.setColor(QPalette::ButtonText, QColor(0, 0, 0));
+        pal.setColor(QPalette::BrightText, QColor(255, 255, 255));
+        pal.setColor(QPalette::Highlight, QColor(0, 120, 215));
+        pal.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
+        a.setPalette(pal);
+    }
 
     // Application metadata
     a.setOrganizationName("QMark");
@@ -54,6 +78,10 @@ int main(int argc, char *argv[])
     QSettings settings("QMark", "SchoolShop");
     QString itemsDbPath = settings.value("db/itemsPath", QDir::currentPath() + "/items.db").toString();
     QString usersDbPath = settings.value("db/usersPath", QDir::currentPath() + "/users.db").toString();
+
+    // Apply saved currency (default PLN). SuperAdmin can change it in Preferences.
+    QString currency = settings.value("settings/currency", "PLN").toString();
+    Domain::setCurrencySymbol(currency == "USD" ? "$" : "zł");
 
     BusinessLogic::initializeCrypto();
 

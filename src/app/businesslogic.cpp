@@ -26,8 +26,8 @@ ValidationResult validateItemDTO(const DTO::ItemDTO& item) {
     if (item.quantity < 0) {
         return ValidationResult::failure("Quantity cannot be negative");
     }
-    if (item.price < 0.0) {
-        return ValidationResult::failure("Price cannot be negative");
+    if (item.price <= 0.0) {
+        return ValidationResult::failure("Price must be greater than zero");
     }
     if (trim(item.status).empty()) {
         return ValidationResult::failure("Item status cannot be empty");

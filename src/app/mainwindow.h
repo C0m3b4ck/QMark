@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QGridLayout>
 #include <QScrollArea>
+#include <QVector>
 #include <optional>
 #include "domain.h"
 #include "businesslogic.h"
@@ -29,6 +30,7 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 public:
     bool isLoggedIn() const;
@@ -38,6 +40,7 @@ public:
     Domain::User::Role getCurrentUserRole() const;
     void setCurrentUser(const Domain::User& user);
     void clearCurrentUser();
+    void syncLanguageUi();
 
 private slots:
     // ── Login / Register ──────────────────────────────────────────
@@ -48,13 +51,15 @@ private slots:
     void on_btnClear_password2_register_clicked();
     void on_chkHide_login_toggled(bool checked);
     void on_chkHide_register_toggled(bool checked);
-    void on_txtPwd1_register_textChanged(const QString &text);
+    void on_txtPassword1_register_textChanged(const QString &text);
 
     // ── Menu ──────────────────────────────────────────────────────
     void on_actionClose_triggered();
     void on_actionLog_out_triggered();
     void on_actionLog_in_triggered();
     void on_actionRegister_triggered();
+    void on_actionLanguageEnglish_triggered();
+    void on_actionLanguagePolish_triggered();
 
     // ── Items ─────────────────────────────────────────────────────
     void on_actionAdd_Items_triggered();
@@ -85,9 +90,13 @@ private slots:
 
     // ── Sell Item (POS) ──────────────────────────────────────────
     void on_actionSell_Item_triggered();
-    void on_btnSearch_sell_clicked();
-    void on_btnSellItem_clicked();
-    void on_lstSearch_sell_itemClicked(QListWidgetItem *item);
+    void on_btnSearch_sell_page_clicked();
+    void on_chkKeybinds_sell_toggled(bool checked);
+    void on_btnRefreshSalesLog_sell_clicked();
+    void on_btnUndoSale_sell_clicked();
+
+    // ── Resupply ──────────────────────────────────────────────────
+    void on_actionResupply_triggered();
 
     // ── Categories ────────────────────────────────────────────────
     void on_actionManage_Categories_triggered();
@@ -150,6 +159,7 @@ private slots:
     void on_actionPreferences_triggered();
     void on_btnSavePreferences_clicked();
     void on_btnResetPreferences_clicked();
+    void on_btnConvertPrices_pref_clicked();
     void on_chkWorklog_toggled(bool checked);
 
     // ── Worklog Stats ─────────────────────────────────────────────
@@ -177,8 +187,21 @@ private:
     Worklog m_worklog;
     QString m_worklogFilePath;
 
+    // ── Page navigation / roles ───────────────────────────────────
+    void goToPage(int index);
+    void applyRoleRestrictions();
+
+    // ── Language / currency ───────────────────────────────────────
+    void applyLanguageToUi();
+    void updatePricePlaceholders();
+
     // ── First-run setup ───────────────────────────────────────────
-    void buildFirstRunPage();
+    QWidget* buildFirstRunPage();
+    QWidget* m_firstRunPage = nullptr;
+
+    // ── Resupply ─────────────────────────────────────────────────
+    QWidget* buildResupplyPage();
+    QWidget* m_resupplyPage = nullptr;
 
     // ── Dashboard ────────────────────────────────────────────────
     void refreshDashboard();
@@ -186,7 +209,18 @@ private:
     // ── POS Grid helpers ──────────────────────────────────────────
     void rebuildItemGrid(const std::vector<Domain::Item>& items);
     QWidget* createItemCard(const Domain::Item& item);
+    void refreshSellPage();
+    void refreshSalesLog();
+    void highlightSellCard(int index);
+    bool sellProductAtIndex(int index);
+    void undoSaleById(const QString& saleId);
     QString m_selectedSellItemId;
+
+    // Keybinds state (sell page)
+    bool m_keybindsEnabled = true;
+    std::vector<Domain::Item> m_sellItems;   // items currently shown in the grid
+    QVector<QWidget*> m_sellCards;           // card widgets in grid order
+    int m_sellHighlightIndex = -1;           // currently highlighted card (-1 = none)
 };
 
 #endif // MAINWINDOW_H

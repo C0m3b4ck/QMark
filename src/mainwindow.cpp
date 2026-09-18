@@ -5,11 +5,13 @@
 #include "crypto.h"
 #include "logger.h"
 #include "telemetry.h"
+#include "translations.h"
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QCloseEvent>
 #include <QResizeEvent>
+#include <QKeyEvent>
 #include <QScrollBar>
 #include <QGridLayout>
 #include <QScrollArea>
@@ -18,12 +20,13 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QLabel>
+#include <QSpinBox>
+#include <QMenu>
+#include <QMenuBar>
+#include <QAction>
+#include <QLocale>
 #include <unordered_map>
 #include <QFrame>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QPushButton>
-#include <QLabel>
 #include <QFont>
 #include <QSettings>
 #include <QDateTime>
@@ -33,6 +36,47 @@
 #include <QPointer>
 #include <sstream>
 #include <iomanip>
+#include <memory>
+
+// ── Currency-aware money formatting (UI side) ──────────────────────
+static QString fmtMoney(double value)
+{
+    if (Domain::currencySymbol() == "zł") {
+        return QLocale(QLocale::Polish).toCurrencyString(value, "zł");
+    }
+    return QLocale(QLocale::English).toCurrencyString(value, "$");
+}
+
+// ── Localized list-row text (UI side) ───────────────────────────────
+// The data layer formats these rows in English ("Qty:", "Shelf:", ...);
+// the UI rebuilds them through the translation layer so Polish users
+// see Polish labels.
+static QString itemListText(const Domain::Item& it)
+{
+    return QString::fromStdString(it.name) + " | "
+        + Tr::trS("Qty: ") + QString::number(it.quantity) + " | "
+        + fmtMoney(it.price) + " | "
+        + QString::fromStdString(it.status) + " | "
+        + Tr::trS("Shelf: ") + QString::fromStdString(it.shelf) + " | "
+        + Tr::trS("Category: ") + QString::fromStdString(it.category) + " | "
+        + Tr::trS("ID: ") + QString::fromStdString(it.id);
+}
+
+static QString saleListText(const Domain::Sale& s,
+                            const std::unordered_map<std::string, std::string>& names)
+{
+    QString itemName = QString::fromStdString(
+        names.count(s.itemId) ? names.at(s.itemId) : s.itemId);
+    QString date = QString::fromStdString(Domain::toISOString(s.saleDate));
+    date.replace('T', ' ');
+    date.remove('Z');
+    return Tr::trS("Sale ") + "#" + QString::fromStdString(s.id) + " | "
+        + Tr::trS("Item: ") + itemName + " | "
+        + Tr::trS("Qty: ") + QString::number(s.quantitySold) + " | "
+        + fmtMoney(s.totalAmount) + " | "
+        + Tr::trS("By: ") + QString::fromStdString(s.soldBy) + " | "
+        + date;
+}
 
 MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     : QMainWindow(parent)
@@ -59,22 +103,59 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     ui->chkWorklog->setChecked(worklogEnabled);
     m_worklog.setEnabled(worklogEnabled);
 
+    // Language & currency (SuperAdmin-only switch in Preferences)
+    QString language = settings.value("settings/language", "pl").toString();
+    QString currency = settings.value("settings/currency", "PLN").toString();
+    Domain::setCurrencySymbol(currency == "USD" ? "$" : "zł");
+    if (ui->cboLanguage_pref) {
+        ui->cboLanguage_pref->setItemData(0, "en");
+        ui->cboLanguage_pref->setItemData(1, "pl");
+        ui->cboLanguage_pref->setCurrentIndex(language == "pl" ? 1 : 0);
+    }
+    if (ui->cboCurrency_pref) {
+        ui->cboCurrency_pref->setItemData(0, "PLN");
+        ui->cboCurrency_pref->setItemData(1, "USD");
+        ui->cboCurrency_pref->setCurrentIndex(currency == "USD" ? 1 : 0);
+    }
+
+    // Sell keybinds (toggleable by all roles, sell page + preferences)
+    m_keybindsEnabled = settings.value("settings/sellKeybinds", true).toBool();
+    if (ui->chkKeybinds_sell) ui->chkKeybinds_sell->setChecked(m_keybindsEnabled);
+    if (ui->chkKeybinds_pref) ui->chkKeybinds_pref->setChecked(m_keybindsEnabled);
+
     // Connect Sell button in top bar
     connect(ui->btnSellNav, &QPushButton::clicked, this, &MainWindow::on_actionSell_Item_triggered);
     // Connect dashboard buttons
     connect(ui->btnDashboardSell, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
     connect(ui->btnUndoSale, &QPushButton::clicked, this, &MainWindow::on_btnUndoSale_clicked);
 
-    // ── Start at login page ───────────────────────────────────
-    if (ui->stackedWidget) {
-        ui->stackedWidget->setCurrentIndex(0); // login page
+    // Sell-page search as you type (live card filtering)
+    if (ui->txtSearch_sell_page) {
+        connect(ui->txtSearch_sell_page, &QLineEdit::textChanged, this, [this](const QString& text) {
+            QString term = text.trimmed();
+            if (term.isEmpty()) rebuildItemGrid(m_db.getAllItems());
+            else rebuildItemGrid(m_db.searchItems(term.toStdString(), ""));
+        });
     }
+
+    // ── Start at login page ───────────────────────────────────
+    goToPage(0);
+
+    // ── Build resupply page (appended to the stack) ───────────
+    m_resupplyPage = buildResupplyPage();
 
     // ── First-run: if no users exist, show setup form ─────────
     if (m_db.getAllUsers().empty()) {
-        buildFirstRunPage();
-        ui->stackedWidget->setCurrentIndex(17); // first-run page
+        m_firstRunPage = buildFirstRunPage();
+        if (m_firstRunPage && ui->stackedWidget) {
+            ui->stackedWidget->setCurrentIndex(ui->stackedWidget->indexOf(m_firstRunPage));
+        }
     }
+
+    // ── Apply saved language, roles and currency labels ────────
+    applyLanguageToUi();
+    applyRoleRestrictions();
+    updatePricePlaceholders();
 }
 
 MainWindow::~MainWindow()
@@ -84,9 +165,9 @@ MainWindow::~MainWindow()
 
 // ── First-run Setup (Form Page) ──────────────────────────────────
 // Builds the first-run setup page programmatically and inserts it
-// into the stacked widget at index 17. Shows on startup when no
-// users exist in the database.
-void MainWindow::buildFirstRunPage()
+// into the stacked widget. Shows on startup when no users exist in
+// the database.
+QWidget* MainWindow::buildFirstRunPage()
 {
     QWidget* page = new QWidget();
     QVBoxLayout* mainLayout = new QVBoxLayout(page);
@@ -192,8 +273,8 @@ void MainWindow::buildFirstRunPage()
     centerWrapper->addStretch();
     mainLayout->addLayout(centerWrapper);
 
-    // Insert page into stacked widget at index 17
-    ui->stackedWidget->insertWidget(17, page);
+    // Insert page into stacked widget
+    ui->stackedWidget->addWidget(page);
 
     // Connect the button
     connect(btnCreate, &QPushButton::clicked, this, [this, txtUser, txtPass, txtPass2, statusLabel]() {
@@ -203,25 +284,25 @@ void MainWindow::buildFirstRunPage()
 
         // Validate
         if (username.isEmpty() || password1.isEmpty() || password2.isEmpty()) {
-            statusLabel->setText("All fields are required.");
+            statusLabel->setText(Tr::trS("All fields are required."));
             statusLabel->show();
             return;
         }
 
         if (password1 != password2) {
-            statusLabel->setText("Passwords do not match.");
+            statusLabel->setText(Tr::trS("Passwords do not match."));
             statusLabel->show();
             return;
         }
 
         if (password1.length() < 4) {
-            statusLabel->setText("Password must be at least 4 characters.");
+            statusLabel->setText(Tr::trS("Password must be at least 4 characters."));
             statusLabel->show();
             return;
         }
 
         if (m_db.getUserByUsername(username.toStdString()).has_value()) {
-            statusLabel->setText("Username already exists.");
+            statusLabel->setText(Tr::trS("Username already exists."));
             statusLabel->show();
             return;
         }
@@ -229,7 +310,7 @@ void MainWindow::buildFirstRunPage()
         // Create the SuperAdmin
         std::string hashedPw = hash_string(password1.toStdString());
         if (hashedPw.empty()) {
-            statusLabel->setText("Failed to hash password. Try again.");
+            statusLabel->setText(Tr::trS("Failed to hash password. Try again."));
             statusLabel->show();
             return;
         }
@@ -244,15 +325,17 @@ void MainWindow::buildFirstRunPage()
 
         if (m_db.addUser(admin)) {
             LOG_INFO("First-run: SuperAdmin account created: " + username);
-            QMessageBox::information(this, "Setup Complete",
-                "SuperAdmin account created!\n\nYou can now log in.");
+            QMessageBox::information(this, Tr::trS("Setup Complete"),
+                Tr::trS("SuperAdmin account created!\n\nYou can now log in."));
             // Navigate to login page
-            ui->stackedWidget->setCurrentIndex(0);
+            goToPage(0);
         } else {
-            statusLabel->setText("Failed to create user. Try again.");
+            statusLabel->setText(Tr::trS("Failed to create user. Try again."));
             statusLabel->show();
         }
     });
+
+    return page;
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -274,6 +357,108 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Navigation / roles / language / currency helpers
+// ═══════════════════════════════════════════════════════════════════
+
+// Central navigation: clerks may only visit the login page (0) and the
+// sell page (6). All other roles navigate freely.
+void MainWindow::goToPage(int index)
+{
+    if (!ui->stackedWidget) return;
+    if (index < 0 || index >= ui->stackedWidget->count()) return;
+
+    if (m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::UserRole) {
+        if (index != 0 && index != 6) return; // clerk: blocked
+    }
+
+    ui->stackedWidget->setCurrentIndex(index);
+}
+
+// Hide/restore menu items depending on the current user's role.
+// Clerks only keep: Sell menu + Account menu (Log Out / Exit only).
+// NOTE: visibility must be toggled via menuAction()->setVisible(), NOT
+// menu->setVisible(): QMenu is a Qt::Popup widget, so calling
+// QMenu::setVisible(true) POPS THE MENU OPEN instead of just showing
+// the menu-bar button (that's why every menu used to auto-expand on
+// login). menuAction()->setVisible() toggles the button only.
+void MainWindow::applyRoleRestrictions()
+{
+    bool clerk = m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::UserRole;
+
+    if (ui->menuItems) ui->menuItems->menuAction()->setVisible(!clerk);
+    if (ui->menuSales) ui->menuSales->menuAction()->setVisible(!clerk);
+    if (ui->menuTools) ui->menuTools->menuAction()->setVisible(!clerk);
+    if (ui->menuSell) ui->menuSell->menuAction()->setVisible(true);
+    if (ui->menuLanguage) ui->menuLanguage->menuAction()->setVisible(true); // all roles
+    if (ui->menuFile) {
+        if (ui->actionLog_in) ui->actionLog_in->setVisible(!clerk);
+        if (ui->actionRegister) ui->actionRegister->setVisible(!clerk);
+    }
+}
+
+// Retranslate the whole window (menus, actions, static widgets and the
+// dynamically built resupply/first-run pages).
+void MainWindow::applyLanguageToUi()
+{
+    if (ui->centralwidget) Tr::applyLanguage(ui->centralwidget);
+    if (menuBar()) Tr::applyLanguage(menuBar());
+    if (m_resupplyPage) Tr::applyLanguage(m_resupplyPage);
+    if (m_firstRunPage) Tr::applyLanguage(m_firstRunPage);
+    updatePricePlaceholders();
+    syncLanguageUi();
+}
+
+// Keep the Language menu (and the Preferences language combo) in sync
+// with the currently active language, without re-triggering handlers.
+void MainWindow::syncLanguageUi()
+{
+    QString lang = Tr::language();
+    if (ui->actionLanguageEnglish) {
+        ui->actionLanguageEnglish->blockSignals(true);
+        ui->actionLanguageEnglish->setChecked(lang != "pl");
+        ui->actionLanguageEnglish->blockSignals(false);
+    }
+    if (ui->actionLanguagePolish) {
+        ui->actionLanguagePolish->blockSignals(true);
+        ui->actionLanguagePolish->setChecked(lang == "pl");
+        ui->actionLanguagePolish->blockSignals(false);
+    }
+    if (ui->cboLanguage_pref) {
+        ui->cboLanguage_pref->blockSignals(true);
+        ui->cboLanguage_pref->setCurrentIndex(lang == "pl" ? 1 : 0);
+        ui->cboLanguage_pref->blockSignals(false);
+    }
+}
+
+// ── Language menu ─────────────────────────────────────────────────
+// A quick way to switch between English and Polish (all roles).
+void MainWindow::on_actionLanguageEnglish_triggered()
+{
+    QSettings settings("QMark", "SchoolShop");
+    settings.setValue("settings/language", "en");
+    applyLanguageToUi();
+    statusBar()->showMessage(Tr::trS("Language set to English"), 3000);
+}
+
+void MainWindow::on_actionLanguagePolish_triggered()
+{
+    QSettings settings("QMark", "SchoolShop");
+    settings.setValue("settings/language", "pl");
+    applyLanguageToUi();
+    statusBar()->showMessage(Tr::trS("Language set to Polish"), 3000);
+}
+
+// Keep the price field placeholders in sync with the active currency.
+void MainWindow::updatePricePlaceholders()
+{
+    QString ph = (Domain::currencySymbol() == "zł")
+        ? Tr::trS("Price (zł) *")
+        : Tr::trS("Price ($) *");
+    if (ui->txtPrice_item) ui->txtPrice_item->setPlaceholderText(ph);
+    if (ui->txtPrice_item_edit) ui->txtPrice_item_edit->setPlaceholderText(ph);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Login / Register
 // ═══════════════════════════════════════════════════════════════════
 
@@ -283,7 +468,7 @@ void MainWindow::setLoggedIn(bool loggedIn) { m_isLoggedIn = loggedIn; }
 bool MainWindow::checkLoginRequired(bool)
 {
     if (!m_isLoggedIn) {
-        QMessageBox::information(this, "Login Required", "Please log in first.");
+        QMessageBox::information(this, Tr::trS("Login Required"), Tr::trS("Please log in first."));
         return false;
     }
     return true;
@@ -292,12 +477,12 @@ bool MainWindow::checkLoginRequired(bool)
 bool MainWindow::checkRoleRequired(BusinessLogic::RequiredRole required, bool)
 {
     if (!m_isLoggedIn) {
-        QMessageBox::information(this, "Login Required", "Please log in first.");
+        QMessageBox::information(this, Tr::trS("Login Required"), Tr::trS("Please log in first."));
         return false;
     }
     auto check = BusinessLogic::checkUserRole(m_currentUser, required);
     if (!check.hasAccess) {
-        QMessageBox::warning(this, "Access Denied", QString::fromStdString(check.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Access Denied"), QString::fromStdString(check.errorMessage));
         return false;
     }
     return true;
@@ -319,7 +504,7 @@ void MainWindow::on_btnLogin_clicked()
     QString password = ui->txtPassword_login->text();
 
     if (username.isEmpty() || password.isEmpty()) {
-        QMessageBox::warning(this, "Login", "Please enter username and password.");
+        QMessageBox::warning(this, Tr::trS("Login"), Tr::trS("Please enter username and password."));
         return;
     }
 
@@ -327,7 +512,7 @@ void MainWindow::on_btnLogin_clicked()
         m_db, username.toStdString(), password.toStdString());
 
     if (!user.has_value()) {
-        QMessageBox::warning(this, "Login", "Invalid username or password.");
+        QMessageBox::warning(this, Tr::trS("Login"), Tr::trS("Invalid username or password."));
         return;
     }
 
@@ -336,13 +521,19 @@ void MainWindow::on_btnLogin_clicked()
 
     LOG_INFO("User logged in: " + username);
 
-    // Navigate to dashboard
-    if (ui->stackedWidget) {
-        ui->stackedWidget->setCurrentIndex(1); // dashboard
+    applyRoleRestrictions();
+
+    // Clerks land directly on the sell page (only menu they can use)
+    if (getCurrentUserRole() == Domain::User::Role::UserRole) {
+        goToPage(6); // sell page
+        refreshSellPage();
+    } else {
+        goToPage(1); // dashboard
         refreshDashboard();
     }
 
-    statusBar()->showMessage("Logged in as " + username + " (" + QString::fromStdString(user->roleName()) + ")");
+    statusBar()->showMessage(Tr::trS("Logged in as ") + username
+        + " (" + QString::fromStdString(user->roleName()) + ")");
 }
 
 // ── Register ───────────────────────────────────────────────────
@@ -351,7 +542,7 @@ void MainWindow::on_btnRegister_clicked()
     // Allow registration without login when no users exist (first-run)
     bool noUsers = m_db.getAllUsers().empty();
     if (!noUsers && (!m_isLoggedIn || getCurrentUserRole() != Domain::User::Role::SuperAdmin)) {
-        QMessageBox::warning(this, "Register", "Only SuperAdmin can register new users.");
+        QMessageBox::warning(this, Tr::trS("Register"), Tr::trS("Only SuperAdmin can register new users."));
         return;
     }
 
@@ -360,7 +551,7 @@ void MainWindow::on_btnRegister_clicked()
     QString password2 = ui->txtPassword2_register->text();
 
     if (password1 != password2) {
-        QMessageBox::warning(this, "Register", "Passwords do not match.");
+        QMessageBox::warning(this, Tr::trS("Register"), Tr::trS("Passwords do not match."));
         return;
     }
 
@@ -376,16 +567,14 @@ void MainWindow::on_btnRegister_clicked()
     userDto.id = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     userDto.username = username.toStdString();
-    userDto.password = hash_string(password1.toStdString());
-    if (userDto.password.empty()) {
-        QMessageBox::warning(this, "Register", "Failed to hash password.");
-        return;
-    }
+    // BusinessLogic::addUser() hashes the raw password before storing;
+    // do NOT pre-hash here (double hashing would break login).
+    userDto.password = password1.toStdString();
     userDto.role = role;
 
     auto result = BusinessLogic::addUser(m_db, userDto);
     if (result.isValid) {
-        QMessageBox::information(this, "Register", "User registered successfully.");
+        QMessageBox::information(this, Tr::trS("Register"), Tr::trS("User registered successfully."));
         LOG_INFO("User registered: " + username);
     } else {
         QMessageBox::warning(this, "Register", QString::fromStdString(result.errorMessage));
@@ -407,7 +596,7 @@ void MainWindow::on_chkHide_register_toggled(bool checked)
     ui->txtPassword2_register->setEchoMode(checked ? QLineEdit::PasswordEchoOnEdit : QLineEdit::Normal);
 }
 
-void MainWindow::on_txtPwd1_register_textChanged(const QString &text)
+void MainWindow::on_txtPassword1_register_textChanged(const QString& text)
 {
     Q_UNUSED(text);
     // Could add password strength indicator here
@@ -423,26 +612,21 @@ void MainWindow::on_actionLog_out_triggered()
 {
     LOG_INFO("User logged out: " + QString::fromStdString(m_currentUser.value_or(Domain::User{}).username));
     clearCurrentUser();
-    if (ui->stackedWidget) {
-        ui->stackedWidget->setCurrentIndex(0);
-    }
-    statusBar()->showMessage("Logged out");
+    applyRoleRestrictions();
+    goToPage(0);
+    statusBar()->showMessage(Tr::trS("Logged out"));
 }
 
 void MainWindow::on_actionLog_in_triggered()
 {
-    if (ui->stackedWidget) {
-        ui->stackedWidget->setCurrentIndex(0);
-    }
+    goToPage(0);
 }
 
 void MainWindow::on_actionRegister_triggered()
 {
     bool noUsers = m_db.getAllUsers().empty();
     if (noUsers || checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) {
-        if (ui->stackedWidget) {
-            ui->stackedWidget->setCurrentIndex(16); // Register page
-        }
+        goToPage(16); // Register page
     }
 }
 
@@ -452,8 +636,8 @@ void MainWindow::on_actionRegister_triggered()
 
 void MainWindow::on_actionAdd_Items_triggered()
 {
-    if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(2); // Add Item page
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(2); // Add Item page
 }
 
 void MainWindow::on_btnAdd_item_clicked()
@@ -536,19 +720,25 @@ void MainWindow::on_txtId_item_textChanged(const QString &text)
 
 void MainWindow::on_actionEdit_Items_triggered()
 {
-    if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(3); // Edit Item page
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(3); // Edit Item page
+    on_btnSearch_item_edit_clicked();   // autopopulate the list
 }
 
 void MainWindow::on_btnSearch_item_edit_clicked()
 {
     QString term = ui->txtSearch_item_edit->text().trimmed();
     QString field = ui->cboSearchField_item_edit ? ui->cboSearchField_item_edit->currentText().toLower() : "";
-    auto items = BusinessLogic::populateList(m_db, "items", term.toStdString(), field.toStdString());
+    auto list = BusinessLogic::populateList(m_db, "items", term.toStdString(), field.toStdString());
+    auto all = m_db.getAllItems();
+    std::unordered_map<std::string, Domain::Item> byId;
+    for (const auto& it : all) byId[it.id] = it;
     ui->lstSearch_item_edit->clear();
-    for (const auto& item : items) {
-        QListWidgetItem* lwi = new QListWidgetItem(QString::fromStdString(item.displayText));
-        lwi->setData(Qt::UserRole, QString::fromStdString(item.id));
+    for (const auto& entry : list) {
+        QString text = byId.count(entry.id) ? itemListText(byId[entry.id])
+                                            : QString::fromStdString(entry.displayText);
+        QListWidgetItem* lwi = new QListWidgetItem(text);
+        lwi->setData(Qt::UserRole, QString::fromStdString(entry.id));
         ui->lstSearch_item_edit->addItem(lwi);
     }
 }
@@ -613,18 +803,24 @@ void MainWindow::on_btnClear_id_item_edit_clicked() { ui->txtId_item_edit->clear
 
 void MainWindow::on_actionRemove_Items_triggered()
 {
-    if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(4); // Remove Item page
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(4); // Remove Item page
+    on_btnSearch_item_remove_clicked(); // autopopulate the list
 }
 
 void MainWindow::on_btnSearch_item_remove_clicked()
 {
     QString term = ui->txtSearch_item_remove->text().trimmed();
-    auto items = BusinessLogic::populateList(m_db, "items", term.toStdString(), "");
+    auto list = BusinessLogic::populateList(m_db, "items", term.toStdString(), "");
+    auto all = m_db.getAllItems();
+    std::unordered_map<std::string, Domain::Item> byId;
+    for (const auto& it : all) byId[it.id] = it;
     ui->lstSearch_item_remove->clear();
-    for (const auto& item : items) {
-        QListWidgetItem* lwi = new QListWidgetItem(QString::fromStdString(item.displayText));
-        lwi->setData(Qt::UserRole, QString::fromStdString(item.id));
+    for (const auto& entry : list) {
+        QString text = byId.count(entry.id) ? itemListText(byId[entry.id])
+                                            : QString::fromStdString(entry.displayText);
+        QListWidgetItem* lwi = new QListWidgetItem(text);
+        lwi->setData(Qt::UserRole, QString::fromStdString(entry.id));
         ui->lstSearch_item_remove->addItem(lwi);
     }
 }
@@ -662,7 +858,7 @@ void MainWindow::on_btnRemove_item_clicked()
 void MainWindow::on_btnUndoRemove_item_clicked()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(5); // Undo removed page
+    goToPage(5); // Undo removed page
 }
 
 void MainWindow::on_btnUndoLast_item_clicked()
@@ -684,12 +880,12 @@ void MainWindow::on_btnUndoLast_item_clicked()
 void MainWindow::on_actionUndo_Removed_Items_triggered()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(5);
+    goToPage(5);
 
     auto removed = m_db.getRemovedItems();
     ui->lstSearch_undoremoved->clear();
     for (const auto& item : removed) {
-        QListWidgetItem* lwi = new QListWidgetItem(QString::fromStdString(item.toDisplayString()));
+        QListWidgetItem* lwi = new QListWidgetItem(itemListText(item));
         lwi->setData(Qt::UserRole, QString::fromStdString(item.id));
         ui->lstSearch_undoremoved->addItem(lwi);
     }
@@ -758,7 +954,7 @@ void MainWindow::refreshDashboard()
     if (ui->lblItemsSoldValue)
         ui->lblItemsSoldValue->setText(QString::number(itemsSold));
     if (ui->lblRevenueValue)
-        ui->lblRevenueValue->setText("$" + QString::number(revenue, 'f', 2));
+        ui->lblRevenueValue->setText(fmtMoney(revenue));
 
     // Recent sales (last 10) — getAllSales returns most recent first
     if (ui->lstRecentSales) {
@@ -770,13 +966,13 @@ void MainWindow::refreshDashboard()
                 itemNames.count(s.itemId) ? itemNames[s.itemId] : s.itemId);
             QString text = itemName
                 + "  ×" + QString::number(s.quantitySold)
-                + "  $" + QString::number(s.totalAmount, 'f', 2);
+                + "  " + fmtMoney(s.totalAmount);
             QListWidgetItem* item = new QListWidgetItem(text);
             item->setData(Qt::UserRole, QString::fromStdString(s.id));
             ui->lstRecentSales->addItem(item);
         }
         if (ui->lstRecentSales->count() == 0) {
-            QListWidgetItem* placeholder = new QListWidgetItem("No sales recorded yet.");
+            QListWidgetItem* placeholder = new QListWidgetItem(Tr::trS("No sales recorded yet."));
             placeholder->setFlags(Qt::NoItemFlags);
             ui->lstRecentSales->addItem(placeholder);
         }
@@ -794,43 +990,12 @@ void MainWindow::on_btnUndoSale_clicked()
 
     auto sales = m_db.getAllSales();
     if (sales.empty()) {
-        QMessageBox::information(this, "Undo Sale", "No sales to undo.");
+        QMessageBox::information(this, Tr::trS("Undo Sale"), Tr::trS("No sales to undo."));
         return;
     }
 
-    // Show the most recent sale and ask to confirm undo (first in list since sorted DESC)
-    const auto& last = sales[0];
-    auto item = m_db.getItemById(last.itemId);
-    QString itemName = item.has_value()
-        ? QString::fromStdString(item->name)
-        : QString::fromStdString(last.itemId);
-
-    QMessageBox::StandardButton reply = QMessageBox::question(this, "Undo Sale",
-        "Undo the most recent sale?\n\n"
-        + itemName
-        + " ×" + QString::number(last.quantitySold)
-        + "  ($" + QString::number(last.totalAmount, 'f', 2) + ")",
-        QMessageBox::Yes | QMessageBox::No);
-
-    if (reply != QMessageBox::Yes) return;
-
-    // Restore stock
-    if (item.has_value()) {
-        Domain::Item updated = item.value();
-        updated.quantity += last.quantitySold;
-        if (updated.status == "Out of Stock" && updated.quantity > 0)
-            updated.status = "In Stock";
-        else if (updated.status == "Low Stock" && updated.quantity > 10)
-            updated.status = "In Stock";
-        m_db.updateItem(updated);
-    }
-
-    // Remove the sale record
-    m_db.deleteSale(last.id);
-
-    LOG_INFO("Sale undone: " + itemName + " x" + QString::number(last.quantitySold));
-    QMessageBox::information(this, "Undo Sale", "Sale undone. Stock restored.");
-    refreshDashboard();
+    // Undo the most recent sale (first in list since sorted DESC)
+    undoSaleById(QString::fromStdString(sales[0].id));
 }
 
 void MainWindow::on_lstRecentSales_itemClicked(QListWidgetItem *item)
@@ -840,20 +1005,380 @@ void MainWindow::on_lstRecentSales_itemClicked(QListWidgetItem *item)
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Resupply
+// ═══════════════════════════════════════════════════════════════════
+
+void MainWindow::on_actionResupply_triggered()
+{
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (m_resupplyPage && ui->stackedWidget) {
+        goToPage(ui->stackedWidget->indexOf(m_resupplyPage));
+    }
+}
+
+QWidget* MainWindow::buildResupplyPage()
+{
+    QWidget* page = new QWidget();
+    page->setObjectName("resupplyPage");
+    QVBoxLayout* mainLayout = new QVBoxLayout(page);
+    mainLayout->setSpacing(0);
+
+    // ── Top bar ──
+    QFrame* topBar = new QFrame();
+    topBar->setMaximumHeight(60);
+    topBar->setStyleSheet("background: #0078d4;");
+    QHBoxLayout* topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(15, 0, 15, 0);
+
+    QPushButton* btnBack = new QPushButton(Tr::trS("← Back"));
+    btnBack->setStyleSheet(
+        "QPushButton { color: white; background: transparent; border: none; "
+        "font-size: 14px; font-weight: bold; padding: 5px 10px; }"
+        "QPushButton:hover { background: rgba(255,255,255,0.15); border-radius: 4px; }");
+    btnBack->setCursor(Qt::PointingHandCursor);
+    btnBack->setMinimumHeight(36);
+    topLayout->addWidget(btnBack);
+
+    QLabel* title = new QLabel(Tr::trS("Resupply"));
+    title->setStyleSheet("color: white; font-size: 16px; font-weight: bold;");
+    topLayout->addWidget(title);
+    topLayout->addStretch();
+    mainLayout->addWidget(topBar);
+
+    // ── Content ──
+    QHBoxLayout* contentLayout = new QHBoxLayout();
+    contentLayout->setContentsMargins(15, 15, 15, 15);
+    contentLayout->setSpacing(20);
+
+    // ── Left panel: search + results ──
+    QWidget* leftPanel = new QWidget();
+    QVBoxLayout* leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+
+    QLabel* searchLabel = new QLabel(Tr::trS("Search Items"));
+    QFont searchFont = searchLabel->font();
+    searchFont.setPointSize(14);
+    searchFont.setBold(true);
+    searchLabel->setFont(searchFont);
+    leftLayout->addWidget(searchLabel);
+
+    // Search bar
+    QLineEdit* searchInput = new QLineEdit();
+    searchInput->setObjectName("resupplySearch");
+    searchInput->setPlaceholderText(Tr::trS("Type item name to search..."));
+    searchInput->setMinimumHeight(40);
+    QFont searchInputFont;
+    searchInputFont.setPointSize(13);
+    searchInput->setFont(searchInputFont);
+    searchInput->setStyleSheet(
+        "QLineEdit { border: 2px solid #ddd; border-radius: 8px; padding: 8px 12px; }"
+        "QLineEdit:focus { border-color: #0078d4; }");
+    leftLayout->addWidget(searchInput);
+
+    // Results list
+    QListWidget* resultsList = new QListWidget();
+    resultsList->setObjectName("resupplyResults");
+    resultsList->setMinimumHeight(300);
+    resultsList->setStyleSheet(
+        "QListWidget { border: 1px solid #ddd; border-radius: 8px; background: white; }"
+        "QListWidget::item { padding: 10px; border-bottom: 1px solid #eee; }"
+        "QListWidget::item:selected { background: #e3f2fd; color: black; }"
+        "QListWidget::item:hover { background: #f5f5f5; }");
+    leftLayout->addWidget(resultsList);
+
+    contentLayout->addWidget(leftPanel, 1);
+
+    // ── Right panel: selected item + quick quantity controls ──
+    QWidget* rightPanel = new QWidget();
+    rightPanel->setMinimumWidth(320);
+    QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+
+    QLabel* selectedLabel = new QLabel(Tr::trS("Selected Item"));
+    selectedLabel->setFont(searchFont);
+    rightLayout->addWidget(selectedLabel);
+
+    // Item info card
+    QFrame* itemCard = new QFrame();
+    itemCard->setFrameShape(QFrame::StyledPanel);
+    itemCard->setStyleSheet(
+        "QFrame { background: white; border: 1px solid #ddd; border-radius: 10px; padding: 15px; }"
+        "QLabel { background: transparent; }");
+    QVBoxLayout* cardLayout = new QVBoxLayout(itemCard);
+
+    QLabel* itemNameLabel = new QLabel(Tr::trS("No item selected"));
+    itemNameLabel->setObjectName("resupplyItemName");
+    QFont nameFont = itemNameLabel->font();
+    nameFont.setPointSize(16);
+    nameFont.setBold(true);
+    itemNameLabel->setFont(nameFont);
+    itemNameLabel->setStyleSheet("color: black; background: transparent;");
+    cardLayout->addWidget(itemNameLabel);
+
+    QLabel* itemInfoLabel = new QLabel(Tr::trS("Search and select an item from the list"));
+    itemInfoLabel->setObjectName("resupplyItemInfo");
+    itemInfoLabel->setStyleSheet("color: #666; background: transparent;");
+    cardLayout->addWidget(itemInfoLabel);
+
+    QLabel* qtyLabel = new QLabel("");
+    qtyLabel->setObjectName("resupplyQty");
+    QFont qtyFont = qtyLabel->font();
+    qtyFont.setPointSize(14);
+    qtyFont.setBold(true);
+    qtyLabel->setFont(qtyFont);
+    qtyLabel->setStyleSheet("color: #0078d4; background: transparent;");
+    cardLayout->addWidget(qtyLabel);
+
+    rightLayout->addWidget(itemCard);
+    rightLayout->addSpacing(15);
+
+    // ── Quick add/subtract buttons (no manual editing) ──
+    QLabel* quickLabel = new QLabel(Tr::trS("Adjust quantity:"));
+    quickLabel->setStyleSheet("font-weight: bold; font-size: 13px;");
+    rightLayout->addWidget(quickLabel);
+
+    QGridLayout* quickGrid = new QGridLayout();
+    quickGrid->setSpacing(8);
+    const int deltas[6] = { -10, -5, -1, 1, 5, 10 };
+    QVector<QPushButton*> quickBtns;
+    for (int i = 0; i < 6; ++i) {
+        QPushButton* b = new QPushButton(QString::number(deltas[i]));
+        b->setMinimumHeight(46);
+        b->setCursor(Qt::PointingHandCursor);
+        QFont f = b->font();
+        f.setPointSize(14);
+        f.setBold(true);
+        b->setFont(f);
+        if (deltas[i] > 0) {
+            b->setStyleSheet(
+                "QPushButton { background-color: #2e7d32; color: white; border: none; border-radius: 8px; }"
+                "QPushButton:hover { background-color: #1b5e20; }");
+        } else {
+            b->setStyleSheet(
+                "QPushButton { background-color: #e53935; color: white; border: none; border-radius: 8px; }"
+                "QPushButton:hover { background-color: #b71c1c; }");
+        }
+        b->setObjectName(QString("resupplyQuick_%1").arg(i));
+        quickBtns.append(b);
+        quickGrid->addWidget(b, i / 3, i % 3);
+    }
+    rightLayout->addLayout(quickGrid);
+    rightLayout->addSpacing(8);
+
+    // ── Fine control: spin box (optional) + apply ──
+    QHBoxLayout* spinRow = new QHBoxLayout();
+    QSpinBox* qtySpinBox = new QSpinBox();
+    qtySpinBox->setObjectName("resupplySpin");
+    qtySpinBox->setRange(0, 999999);
+    qtySpinBox->setValue(0);
+    qtySpinBox->setMinimumHeight(45);
+    QFont spinFont;
+    spinFont.setPointSize(16);
+    spinFont.setBold(true);
+    qtySpinBox->setFont(spinFont);
+    qtySpinBox->setStyleSheet(
+        "QSpinBox { border: 2px solid #ddd; border-radius: 8px; padding: 5px 10px; color: black; }"
+        "QSpinBox:focus { border-color: #0078d4; }");
+    spinRow->addWidget(qtySpinBox);
+
+    QPushButton* btnApply = new QPushButton(Tr::trS("APPLY"));
+    btnApply->setObjectName("resupplyApply");
+    btnApply->setMinimumHeight(45);
+    btnApply->setCursor(Qt::PointingHandCursor);
+    QFont applyFont = btnApply->font();
+    applyFont.setPointSize(14);
+    applyFont.setBold(true);
+    btnApply->setFont(applyFont);
+    btnApply->setStyleSheet(
+        "QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 8px; padding: 0 20px; }"
+        "QPushButton:hover { background-color: #005a9e; }"
+        "QPushButton:disabled { background-color: #ccc; color: #666; }");
+    btnApply->setEnabled(false);
+    spinRow->addWidget(btnApply);
+    rightLayout->addLayout(spinRow);
+
+    // Status
+    QLabel* statusLabel = new QLabel("");
+    statusLabel->setObjectName("resupplyStatus");
+    statusLabel->setAlignment(Qt::AlignCenter);
+    statusLabel->setWordWrap(true);
+    rightLayout->addWidget(statusLabel);
+
+    rightLayout->addStretch();
+
+    contentLayout->addWidget(rightPanel, 1);
+
+    mainLayout->addLayout(contentLayout);
+
+    // Append page to the stack and remember it for navigation
+    ui->stackedWidget->addWidget(page);
+
+    // ── State ──
+    // Heap-allocated so every deferred lambda (clicked/textChanged/
+    // currentChanged connections) still OWNS it after this function
+    // returns. A stack local captured by reference here would dangle and
+    // crash the app on the first click (use-after-free).
+    auto selectedItemId = std::make_shared<QString>();
+
+    // (Re)populates the results list for the current search term. An
+    // empty term lists everything, so the page starts fully populated.
+    auto refillList = [this, resultsList, searchInput]() {
+        QString term = searchInput->text().trimmed();
+        resultsList->clear();
+        auto items = m_db.getAllItems();
+        for (const auto& item : items) {
+            QString name = QString::fromStdString(item.name);
+            if (!term.isEmpty() && !name.contains(term, Qt::CaseInsensitive)) continue;
+            QListWidgetItem* lwi = new QListWidgetItem(
+                name + "  (" + Tr::trS("Qty: ") + QString::number(item.quantity) + ")");
+            lwi->setData(Qt::UserRole, QString::fromStdString(item.id));
+            resultsList->addItem(lwi);
+        }
+    };
+
+    // Sets the quantity, persists it, and refreshes the UI.
+    auto applyQuantity = [this, selectedItemId, qtySpinBox, qtyLabel, statusLabel,
+                          resultsList, itemInfoLabel](int newQty, const QString& verb) {
+        if (selectedItemId->isEmpty()) {
+            statusLabel->setText(Tr::trS("Item not found."));
+            statusLabel->setStyleSheet("color: #c62828;");
+            return;
+        }
+        auto itemOpt = m_db.getItemById(selectedItemId->toStdString());
+        if (!itemOpt.has_value()) {
+            statusLabel->setText(Tr::trS("Item not found."));
+            statusLabel->setStyleSheet("color: #c62828;");
+            return;
+        }
+        if (newQty < 0) newQty = 0;
+
+        Domain::Item updated = itemOpt.value();
+        updated.quantity = newQty;
+        // Auto-update status
+        if (newQty == 0) updated.status = "Out of Stock";
+        else if (newQty <= 5) updated.status = "Low Stock";
+        else updated.status = "In Stock";
+        updated.updatedAt = Domain::now();
+
+        if (m_db.updateItem(updated)) {
+            qtyLabel->setText(Tr::trS("Current: ") + QString::number(newQty));
+            statusLabel->setText(verb + " " + QString::number(newQty) + "!");
+            statusLabel->setStyleSheet("color: #2e7d32; font-weight: bold;");
+            qtySpinBox->setValue(newQty);
+            // Update the search result row so it stays in sync
+            for (int i = 0; i < resultsList->count(); ++i) {
+                QListWidgetItem* lwi = resultsList->item(i);
+                if (lwi && lwi->data(Qt::UserRole).toString() == *selectedItemId) {
+                    lwi->setText(QString::fromStdString(updated.name)
+                                 + "  (" + Tr::trS("Qty: ") + QString::number(newQty) + ")");
+                }
+            }
+            itemInfoLabel->setText(Tr::trS("Category: ") + QString::fromStdString(updated.category)
+                                   + "  |  " + Tr::trS("Shelf: ") + QString::fromStdString(updated.shelf)
+                                   + "  |  " + fmtMoney(updated.price));
+            m_worklog.logEntry(WorklogEntry::ActionType::Edit, WorklogEntry::EntityType::Item,
+                              selectedItemId->toStdString(),
+                              "Resupply: adjusted quantity to " + std::to_string(newQty));
+        } else {
+            statusLabel->setText(Tr::trS("Failed to update. Try again."));
+            statusLabel->setStyleSheet("color: #c62828;");
+        }
+    };
+
+    // Refreshes the right panel with the currently selected item.
+    auto refreshSelection = [this, selectedItemId, itemNameLabel, itemInfoLabel, qtyLabel,
+                             qtySpinBox, btnApply, resultsList]() {
+        QListWidgetItem* current = resultsList->currentItem();
+        if (!current) return;
+        QString id = current->data(Qt::UserRole).toString();
+        auto itemOpt = m_db.getItemById(id.toStdString());
+        if (!itemOpt.has_value()) return;
+        const auto& item = itemOpt.value();
+        *selectedItemId = id;
+        itemNameLabel->setText(QString::fromStdString(item.name));
+        itemInfoLabel->setText(Tr::trS("Category: ") + QString::fromStdString(item.category)
+                               + "  |  " + Tr::trS("Shelf: ") + QString::fromStdString(item.shelf)
+                               + "  |  " + fmtMoney(item.price));
+        qtyLabel->setText(Tr::trS("Current: ") + QString::number(item.quantity));
+        qtySpinBox->setValue(item.quantity);
+        btnApply->setEnabled(true);
+    };
+
+    // ── Connections ──
+
+    // Back button
+    connect(btnBack, &QPushButton::clicked, this, [this]() {
+        goToPage(1); // dashboard
+    });
+
+    // Search as you type
+    connect(searchInput, &QLineEdit::textChanged, this, [this, refillList]() {
+        refillList();
+    });
+
+    // Select item from the list
+    connect(resultsList, &QListWidget::itemClicked, this,
+        [this, selectedItemId, refreshSelection](QListWidgetItem* current) {
+            if (!current) return;
+            *selectedItemId = current->data(Qt::UserRole).toString();
+            refreshSelection();
+        });
+
+    // Quick +/− buttons: adjust and save immediately (no manual editing)
+    for (int i = 0; i < 6; ++i) {
+        int delta = deltas[i];
+        connect(quickBtns[i], &QPushButton::clicked, this,
+            [this, selectedItemId, delta, qtySpinBox, applyQuantity]() {
+                if (selectedItemId->isEmpty()) return;
+                auto itemOpt = m_db.getItemById(selectedItemId->toStdString());
+                if (!itemOpt.has_value()) return;
+                int newQty = itemOpt->quantity + delta;
+                if (newQty < 0) newQty = 0;
+                applyQuantity(newQty, Tr::trS("Quantity updated to"));
+            });
+    }
+
+    // Apply button (uses the spin box value)
+    connect(btnApply, &QPushButton::clicked, this,
+        [this, selectedItemId, qtySpinBox, applyQuantity]() {
+            if (selectedItemId->isEmpty()) return;
+            applyQuantity(qtySpinBox->value(), Tr::trS("Quantity set to"));
+        });
+
+    // Re-select the highlighted item when the page is shown again
+    connect(ui->stackedWidget, &QStackedWidget::currentChanged, this,
+        [this, page, refillList, refreshSelection]() {
+            if (ui->stackedWidget->currentWidget() == page) {
+                refillList();      // keep the list fresh / populated
+                refreshSelection();
+            }
+        });
+
+    // The page starts fully populated (no search needed)
+    refillList();
+
+    return page;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Sell Item (POS)
 // ═══════════════════════════════════════════════════════════════════
 
 void MainWindow::on_actionSell_Item_triggered()
 {
     if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(6); // POS page
-
-    // Populate item grid
-    auto items = m_db.getAllItems();
-    rebuildItemGrid(items);
+    goToPage(6); // POS page
+    refreshSellPage();
 }
 
-void MainWindow::on_btnSearch_sell_clicked()
+void MainWindow::refreshSellPage()
+{
+    auto items = m_db.getAllItems();
+    rebuildItemGrid(items);
+    refreshSalesLog();
+}
+
+void MainWindow::on_btnSearch_sell_page_clicked()
 {
     QString term = ui->txtSearch_sell_page->text().trimmed();
     std::vector<Domain::Item> items;
@@ -869,6 +1394,10 @@ void MainWindow::rebuildItemGrid(const std::vector<Domain::Item>& items)
 {
     if (!ui->gridLayoutItemScroll) return;
 
+    m_sellItems = items;
+    m_sellCards.clear();
+    m_sellHighlightIndex = -1;
+
     // Clear existing grid
     QLayoutItem* child;
     while ((child = ui->gridLayoutItemScroll->takeAt(0)) != nullptr) {
@@ -881,9 +1410,18 @@ void MainWindow::rebuildItemGrid(const std::vector<Domain::Item>& items)
     for (int _c = 0; _c < cols; ++_c) ui->gridLayoutItemScroll->setColumnStretch(_c, 1);
 
     int row = 0, col = 0;
-    for (const auto& item : items) {
-        QWidget* card = createItemCard(item);
+    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+        QWidget* card = createItemCard(items[i]);
         ui->gridLayoutItemScroll->addWidget(card, row, col);
+        m_sellCards.append(card);
+        // Wire the card's SELL button to the shared sell-by-index flow
+        QPushButton* sellBtn = card->findChild<QPushButton*>("sellCardBtn");
+        if (sellBtn) {
+            int index = i;
+            connect(sellBtn, &QPushButton::clicked, this, [this, index]() {
+                sellProductAtIndex(index);
+            });
+        }
         col++;
         if (col >= cols) { col = 0; row++; }
     }
@@ -901,22 +1439,24 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item)
 
     QVBoxLayout* layout = new QVBoxLayout(card);
 
-    // Item name
+    // Item name — explicit color keeps the text visible on light cards
+    // (fixes white/grey-on-white text on Windows 11).
     QLabel* nameLbl = new QLabel(QString::fromStdString(item.name));
     QFont nameFont = nameLbl->font();
     nameFont.setPointSize(14);
     nameFont.setBold(true);
     nameLbl->setFont(nameFont);
     nameLbl->setWordWrap(true);
+    nameLbl->setStyleSheet("color: black; background: transparent;");
     layout->addWidget(nameLbl);
 
     // Price
-    QLabel* priceLbl = new QLabel("$" + QString::number(item.price, 'f', 2));
+    QLabel* priceLbl = new QLabel(fmtMoney(item.price));
     QFont priceFont = priceLbl->font();
     priceFont.setPointSize(18);
     priceFont.setBold(true);
     priceLbl->setFont(priceFont);
-    priceLbl->setStyleSheet("color: #2e7d32;");
+    priceLbl->setStyleSheet("color: #2e7d32; background: transparent;");
     layout->addWidget(priceLbl);
 
     // Quantity & status
@@ -924,9 +1464,9 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item)
     if (item.status == "Low Stock") statusColor = "#f57f17";
     else if (item.status == "Out of Stock" || item.status == "Sold Out") statusColor = "#c62828";
 
-    QLabel* qtyLbl = new QLabel("Qty: " + QString::number(item.quantity) +
+    QLabel* qtyLbl = new QLabel(Tr::trS("Qty: ") + QString::number(item.quantity) +
                                  "  |  " + QString::fromStdString(item.status));
-    qtyLbl->setStyleSheet("color: " + statusColor + "; font-size: 12px;");
+    qtyLbl->setStyleSheet("color: " + statusColor + "; font-size: 12px; background: transparent;");
     layout->addWidget(qtyLbl);
 
     // Shelf/Category
@@ -934,14 +1474,15 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item)
         QString info = QString::fromStdString(item.shelf);
         if (!item.category.empty()) info += "  |  " + QString::fromStdString(item.category);
         QLabel* infoLbl = new QLabel(info);
-        infoLbl->setStyleSheet("color: #666; font-size: 11px;");
+        infoLbl->setStyleSheet("color: #666; font-size: 11px; background: transparent;");
         layout->addWidget(infoLbl);
     }
 
     layout->addStretch();
 
     // Sell button — large touch target
-    QPushButton* sellBtn = new QPushButton("SELL");
+    QPushButton* sellBtn = new QPushButton(Tr::trS("SELL"));
+    sellBtn->setObjectName("sellCardBtn");
     sellBtn->setMinimumHeight(50);
     sellBtn->setCursor(Qt::PointingHandCursor);
     sellBtn->setStyleSheet(
@@ -952,48 +1493,309 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item)
         "QPushButton:disabled { background-color: #ccc; color: #666; }"
     );
     sellBtn->setEnabled(item.quantity > 0 && item.status != "Sold Out");
-
-    // Connect sell button
-    std::string itemId = item.id;
-    QPointer<MainWindow> safeSelf = this;
-    connect(sellBtn, &QPushButton::clicked, [safeSelf, itemId]() {
-        if (!safeSelf) return;  // window destroyed
-        safeSelf->m_selectedSellItemId = QString::fromStdString(itemId);
-        // Show quantity dialog
-        bool ok;
-        int qty = QInputDialog::getInt(safeSelf, "Sell Item", "Quantity to sell:", 1, 1, 999, 1, &ok);
-        if (ok && qty > 0) {
-            auto result = BusinessLogic::sellItem(
-                safeSelf->m_db, itemId, qty,
-                safeSelf->m_currentUser.value_or(Domain::User{}).id);
-            if (result.isValid) {
-                QMessageBox::information(safeSelf, "Sale", "Item sold successfully!");
-                safeSelf->m_worklog.logEntry(WorklogEntry::ActionType::Sale, WorklogEntry::EntityType::Sale,
-                                        itemId, "Sold item");
-                // Refresh grid
-                auto items = safeSelf->m_db.getAllItems();
-                safeSelf->rebuildItemGrid(items);
-            } else {
-                QMessageBox::warning(safeSelf, "Sale Error", QString::fromStdString(result.errorMessage));
-            }
-        }
-    });
-
     layout->addWidget(sellBtn);
 
     return card;
 }
 
-void MainWindow::on_btnSellItem_clicked()
+// Highlight (and scroll to) the card at `index`. -1 clears the highlight.
+void MainWindow::highlightSellCard(int index)
 {
-    // Fallback: manual sell by ID
-    if (!checkLoginRequired()) return;
-    // This is handled by the grid card sell buttons
+    auto resetBorder = [](QWidget* w) {
+        if (auto* f = qobject_cast<QFrame*>(w)) {
+            f->setStyleSheet(
+                "QFrame { background: white; border: 2px solid #ddd; border-radius: 10px; margin: 5px; }"
+                "QFrame:hover { border-color: #0078d4; }");
+        }
+    };
+    auto highlightBorder = [](QWidget* w) {
+        if (auto* f = qobject_cast<QFrame*>(w)) {
+            f->setStyleSheet(
+                "QFrame { background: #fff8e1; border: 3px solid #f57f17; border-radius: 10px; margin: 5px; }");
+        }
+    };
+
+    if (m_sellHighlightIndex >= 0 && m_sellHighlightIndex < m_sellCards.size()) {
+        resetBorder(m_sellCards[m_sellHighlightIndex]);
+    }
+    m_sellHighlightIndex = -1;
+
+    if (index >= 0 && index < m_sellCards.size()) {
+        m_sellHighlightIndex = index;
+        highlightBorder(m_sellCards[index]);
+        if (ui->scrollAreaItems) {
+            ui->scrollAreaItems->ensureWidgetVisible(m_sellCards[index]);
+        }
+    }
 }
 
-void MainWindow::on_lstSearch_sell_itemClicked(QListWidgetItem *item)
+// Sells ONE unit of the product at the given grid index. Quick POS
+// interface: no quantity dialog, no confirmation popup — the sale just
+// happens and the grid/log refresh. Returns true when a sale happened.
+bool MainWindow::sellProductAtIndex(int index)
 {
-    Q_UNUSED(item);
+    if (index < 0 || index >= static_cast<int>(m_sellItems.size())) return false;
+
+    const auto& item = m_sellItems[index];
+    if (item.quantity <= 0 || item.status == "Sold Out") {
+        QMessageBox::information(this, Tr::trS("Sell Item"), Tr::trS("This item is out of stock."));
+        return false;
+    }
+
+    highlightSellCard(index);
+    m_selectedSellItemId = QString::fromStdString(item.id);
+
+    auto result = BusinessLogic::sellItem(
+        m_db, item.id, 1, m_currentUser.value_or(Domain::User{}).id);
+    if (result.isValid) {
+        m_worklog.logEntry(WorklogEntry::ActionType::Sale, WorklogEntry::EntityType::Sale,
+                           item.id, "Sold item: " + item.name);
+        refreshSellPage();
+        refreshDashboard();
+        return true;
+    }
+
+    QMessageBox::warning(this, Tr::trS("Sale Error"), QString::fromStdString(result.errorMessage));
+    return false;
+}
+
+// ── Sales log (sell page) ──────────────────────────────────────────
+
+void MainWindow::refreshSalesLog()
+{
+    if (!ui->lstSalesLog_sell) return;
+
+    auto sales = m_db.getAllSales();        // newest first
+    auto items = m_db.getAllItems();
+    auto removed = m_db.getRemovedItems();
+
+    std::unordered_map<std::string, std::string> names;
+    for (const auto& it : items) names[it.id] = it.name;
+    for (const auto& r : removed) names[r.id] = r.name;   // deleted items too
+
+    ui->lstSalesLog_sell->clear();
+    for (const auto& s : sales) {
+        QString itemName = QString::fromStdString(names.count(s.itemId) ? names[s.itemId] : s.itemId);
+        QString date = QString::fromStdString(Domain::toISOString(s.saleDate));
+        date.replace(QString("T"), QString(" "));
+        date.remove(QString("Z"));
+        QString text = "[" + date + "] " + itemName
+            + " ×" + QString::number(s.quantitySold)
+            + "  " + fmtMoney(s.totalAmount)
+            + "  #" + QString::fromStdString(s.id);
+        QListWidgetItem* lwi = new QListWidgetItem(text);
+        lwi->setData(Qt::UserRole, QString::fromStdString(s.id));
+        ui->lstSalesLog_sell->addItem(lwi);
+    }
+    if (sales.empty()) {
+        QListWidgetItem* ph = new QListWidgetItem(Tr::trS("No sales recorded yet."));
+        ph->setFlags(Qt::NoItemFlags);
+        ui->lstSalesLog_sell->addItem(ph);
+    }
+}
+
+void MainWindow::on_btnRefreshSalesLog_sell_clicked()
+{
+    refreshSalesLog();
+}
+
+void MainWindow::on_btnUndoSale_sell_clicked()
+{
+    if (!checkLoginRequired()) return;
+
+    auto sales = m_db.getAllSales();
+    if (sales.empty()) {
+        QMessageBox::information(this, Tr::trS("Undo Sale"), Tr::trS("No sales to undo."));
+        return;
+    }
+
+    QString saleId;
+    QListWidgetItem* sel = ui->lstSalesLog_sell ? ui->lstSalesLog_sell->currentItem() : nullptr;
+    if (sel && (sel->flags() & Qt::ItemIsEnabled)) {
+        saleId = sel->data(Qt::UserRole).toString();
+    }
+    // No selection → undo the most recent sale
+    if (saleId.isEmpty()) saleId = QString::fromStdString(sales[0].id);
+
+    undoSaleById(saleId);
+}
+
+// Generalized undo: works for ANY sale (selected or most recent). Stock
+// is restored — the item is even restored from removed_items if it was
+// deleted after the sale — then the sale record is deleted.
+void MainWindow::undoSaleById(const QString& saleId)
+{
+    if (saleId.isEmpty()) return;
+
+    auto sales = m_db.getAllSales();
+    std::optional<Domain::Sale> saleFound;
+    for (const auto& s : sales) {
+        if (QString::fromStdString(s.id) == saleId) { saleFound = s; break; }
+    }
+    if (!saleFound.has_value()) {
+        QMessageBox::warning(this, Tr::trS("Undo Sale"), Tr::trS("Sale not found."));
+        return;
+    }
+    const auto& sale = *saleFound;
+
+    auto item = m_db.getItemById(sale.itemId);
+    QString itemName;
+    if (item.has_value()) {
+        itemName = QString::fromStdString(item->name);
+    } else {
+        // Item may have been deleted after the sale — look in removed_items
+        for (const auto& r : m_db.getRemovedItems()) {
+            if (r.id == sale.itemId) { itemName = QString::fromStdString(r.name); break; }
+        }
+        if (itemName.isEmpty()) itemName = QString::fromStdString(sale.itemId);
+    }
+
+    // No confirmation dialog (quick interface): undo happens directly.
+    // Only failures show a message.
+
+    // Restore the item first if it had been removed
+    if (!item.has_value()) {
+        bool restoredItem = false;
+        for (const auto& r : m_db.getRemovedItems()) {
+            if (r.id == sale.itemId) { restoredItem = m_db.restoreItem(r.id); break; }
+        }
+        if (!restoredItem) {
+            QMessageBox::warning(this, Tr::trS("Undo Sale"),
+                Tr::trS("The item was removed and could not be restored."));
+            return;
+        }
+        item = m_db.getItemById(sale.itemId);
+    }
+
+    if (item.has_value()) {
+        Domain::Item updated = item.value();
+        updated.quantity += sale.quantitySold;
+        // Refresh status (keep it consistent with the new quantity)
+        if (updated.quantity > 0 && (updated.status == "Out of Stock" || updated.status == "Sold Out")) {
+            updated.status = updated.quantity <= 5 ? "Low Stock" : "In Stock";
+        } else if (updated.quantity > 10 && updated.status == "Low Stock") {
+            updated.status = "In Stock";
+        }
+        updated.updatedAt = Domain::now();
+        m_db.updateItem(updated);
+    }
+
+    m_db.deleteSale(sale.id);
+
+    LOG_INFO("Sale undone: " + itemName + " x" + QString::number(sale.quantitySold));
+    refreshSellPage();
+    refreshDashboard();
+}
+
+// ── Sell keybinds ───────────────────────────────────────────────────
+
+void MainWindow::on_chkKeybinds_sell_toggled(bool checked)
+{
+    m_keybindsEnabled = checked;
+    QSettings settings("QMark", "SchoolShop");
+    settings.setValue("settings/sellKeybinds", checked);
+    if (ui->chkKeybinds_pref) {
+        ui->chkKeybinds_pref->blockSignals(true);
+        ui->chkKeybinds_pref->setChecked(checked);
+        ui->chkKeybinds_pref->blockSignals(false);
+    }
+}
+
+// Map an Alt+key press to a sell-grid index. The first 10 items use
+// Alt+1..9 / Alt+0; beyond that the keys go down the QWERTY rows
+// (q w e r t y u i o p a s d f g h j k l z x c v b n m). Any letter
+// whose Alt-combo is already used elsewhere (top-level menu accelerators
+// such as Alt+<menu initial>) is removed from the mapping, exactly as
+// requested - so those combos keep their normal function. Returns -1
+// when the key is not a sell key.
+static int sellKeyIndex(int key, const QList<int>& reserved)
+{
+    if (key >= Qt::Key_1 && key <= Qt::Key_9) return key - Qt::Key_1;
+    if (key == Qt::Key_0) return 9;
+    if (reserved.contains(key)) return -1;
+
+    static const int letters[] = {
+        Qt::Key_Q, Qt::Key_W, Qt::Key_E, Qt::Key_R, Qt::Key_T,
+        Qt::Key_Y, Qt::Key_U, Qt::Key_I, Qt::Key_O, Qt::Key_P,
+        Qt::Key_A, Qt::Key_S, Qt::Key_D, Qt::Key_F, Qt::Key_G,
+        Qt::Key_H, Qt::Key_J, Qt::Key_K, Qt::Key_L,
+        Qt::Key_Z, Qt::Key_X, Qt::Key_C, Qt::Key_V, Qt::Key_B,
+        Qt::Key_N, Qt::Key_M
+    };
+    const int n = int(sizeof(letters) / sizeof(letters[0]));
+    int used = 0;                      // non-reserved letters seen so far
+    for (int i = 0; i < n; ++i) {
+        if (letters[i] == key) return 10 + used;
+        if (!reserved.contains(letters[i])) ++used;
+    }
+    return -1;
+}
+
+// Alt+digits/letters sell directly; arrows move the highlight; Enter
+// sells the highlighted item. Only active on the sell page when keybinds
+// are on and the search box does not have focus.
+void MainWindow::keyPressEvent(QKeyEvent *event)
+{
+    bool onSellPage = ui->stackedWidget
+        && ui->stackedWidget->currentIndex() == 6
+        && ui->txtSearch_sell_page
+        && !ui->txtSearch_sell_page->hasFocus();
+
+    if (m_keybindsEnabled && onSellPage && m_isLoggedIn) {
+        int key = event->key();
+        bool alt = (event->modifiers() & Qt::AltModifier) != 0;
+
+        if (alt && key != Qt::Key_Alt) {
+            // Which Alt+letter combos are taken by the menu bar? Those
+            // letters are dropped from the sell mapping ("functional/used
+            // ones"), computed from the CURRENT (possibly translated)
+            // top-level menu titles.
+            QList<int> reserved;
+            if (menuBar()) {
+                const auto actions = menuBar()->actions();
+                for (QAction* a : actions) {
+                    if (!a->menu()) continue;
+                    QString t = a->menu()->title().trimmed();
+                    if (!t.isEmpty()) {
+                        reserved.append(static_cast<int>(t.at(0).toUpper().toLatin1()));
+                    }
+                }
+            }
+
+            int idx = sellKeyIndex(key, reserved);
+            if (idx >= 0 && idx < m_sellCards.size()) {
+                sellProductAtIndex(idx);
+                event->accept();
+                return;
+            }
+        }
+
+        if (key == Qt::Key_Up || key == Qt::Key_Down
+            || key == Qt::Key_Left || key == Qt::Key_Right) {
+            if (!alt) {
+                int width = ui->scrollAreaItems->viewport()->width();
+                int cols = qMax(1, width / 260);
+                int idx = m_sellHighlightIndex;
+                if (idx < 0) idx = 0;
+                else if (key == Qt::Key_Right && idx + 1 < m_sellCards.size()) idx += 1;
+                else if (key == Qt::Key_Left && idx > 0) idx -= 1;
+                else if (key == Qt::Key_Down && idx + cols < m_sellCards.size()) idx += cols;
+                else if (key == Qt::Key_Up && idx - cols >= 0) idx -= cols;
+                highlightSellCard(idx);
+                event->accept();
+                return;
+            }
+        }
+        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+            if (!alt && m_sellHighlightIndex >= 0 && m_sellHighlightIndex < m_sellCards.size()) {
+                sellProductAtIndex(m_sellHighlightIndex);
+                event->accept();
+                return;
+            }
+        }
+    }
+
+    QMainWindow::keyPressEvent(event);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1002,8 +1804,8 @@ void MainWindow::on_lstSearch_sell_itemClicked(QListWidgetItem *item)
 
 void MainWindow::on_actionManage_Categories_triggered()
 {
-    if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(7); // Categories page
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(7); // Categories page
     auto cats = m_db.getAllCategories();
     ui->lstSearch_category->clear();
     for (const auto& c : cats) {
@@ -1082,8 +1884,8 @@ void MainWindow::on_btnUndoRemove_category_clicked() { on_actionManage_Categorie
 
 void MainWindow::on_actionManage_Shelves_triggered()
 {
-    if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(8); // Shelves page
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(8); // Shelves page
     auto shelves = m_db.getAllShelves();
     ui->lstSearch_shelf->clear();
     for (const auto& s : shelves) {
@@ -1162,24 +1964,27 @@ void MainWindow::on_btnUndoRemove_shelf_clicked() { on_actionManage_Shelves_trig
 
 void MainWindow::on_actionSales_History_triggered()
 {
-    if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(9); // Sales History page
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(9); // Sales History page
     on_btnRefresh_sales_clicked();
 }
 
 void MainWindow::on_btnRefresh_sales_clicked()
 {
     auto sales = m_db.getAllSales();
+    auto items = m_db.getAllItems();
+    std::unordered_map<std::string, std::string> names;
+    for (const auto& it : items) names[it.id] = it.name;
     ui->lstSearch_sales->clear();
     double totalRevenue = 0.0;
     for (const auto& s : sales) {
-        QListWidgetItem* lwi = new QListWidgetItem(QString::fromStdString(s.toDisplayString()));
+        QListWidgetItem* lwi = new QListWidgetItem(saleListText(s, names));
         lwi->setData(Qt::UserRole, QString::fromStdString(s.id));
         ui->lstSearch_sales->addItem(lwi);
         totalRevenue += s.totalAmount;
     }
     if (ui->lblSalesTotal) {
-        ui->lblSalesTotal->setText("Total Revenue: $" + QString::number(totalRevenue, 'f', 2));
+        ui->lblSalesTotal->setText(Tr::trS("Total Revenue: ") + fmtMoney(totalRevenue));
     }
 }
 
@@ -1187,16 +1992,19 @@ void MainWindow::on_btnSearch_sales_clicked()
 {
     QString term = ui->txtSearch_sales->text().trimmed();
     auto sales = m_db.searchSales(term.toStdString(), "");
+    auto items = m_db.getAllItems();
+    std::unordered_map<std::string, std::string> names;
+    for (const auto& it : items) names[it.id] = it.name;
     ui->lstSearch_sales->clear();
     double totalRevenue = 0.0;
     for (const auto& s : sales) {
-        QListWidgetItem* lwi = new QListWidgetItem(QString::fromStdString(s.toDisplayString()));
+        QListWidgetItem* lwi = new QListWidgetItem(saleListText(s, names));
         lwi->setData(Qt::UserRole, QString::fromStdString(s.id));
         ui->lstSearch_sales->addItem(lwi);
         totalRevenue += s.totalAmount;
     }
     if (ui->lblSalesTotal) {
-        ui->lblSalesTotal->setText("Search Total: $" + QString::number(totalRevenue, 'f', 2));
+        ui->lblSalesTotal->setText(Tr::trS("Search Total: ") + fmtMoney(totalRevenue));
     }
 }
 
@@ -1231,8 +2039,8 @@ void MainWindow::on_btnExport_sales_clicked()
 
 void MainWindow::on_actionMake_Report_triggered()
 {
-    if (!checkLoginRequired()) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(10); // Report page
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(10); // Report page
 }
 
 void MainWindow::on_btnGenerateReport_clicked()
@@ -1254,7 +2062,7 @@ void MainWindow::on_btnGenerateReport_clicked()
     report += "         QMARK — SALES REPORT\n";
     report += "═══════════════════════════════════════\n";
     report += "Generated: " + QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") + "\n\n";
-    report += "Total Revenue: $" + QString::number(totalRevenue, 'f', 2) + "\n";
+    report += "Total Revenue: " + fmtMoney(totalRevenue) + "\n";
     report += "Total Transactions: " + QString::number(sales.size()) + "\n";
     report += "Total Items Sold: " + QString::number(totalItemsSold) + "\n\n";
 
@@ -1295,7 +2103,7 @@ void MainWindow::on_btnExportReport_clicked()
 void MainWindow::on_actionDatabase_Selection_triggered()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(11); // DB Selection page
+    goToPage(11); // DB Selection page
 }
 
 void MainWindow::on_actionCreate_Database_triggered()
@@ -1395,7 +2203,7 @@ void MainWindow::on_chkTelemetry_toggled(bool checked)
 void MainWindow::on_actionAccounts_triggered()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(12); // Accounts page
+    goToPage(12); // Accounts page
 
     auto users = m_db.getAllUsers();
     ui->lstSearchAccount->clear();
@@ -1453,7 +2261,13 @@ void MainWindow::on_btnChangePassword_clicked()
         auto users = m_db.getAllUsers();
         for (auto& u : users) {
             if (u.id == userId.toStdString()) {
-                u.passwordHash = newPwd.toStdString();
+                // Never store plaintext passwords — hash before saving
+                std::string hashedPw = hash_string(newPwd.toStdString());
+                if (hashedPw.empty()) {
+                    QMessageBox::warning(this, "Change Password", "Failed to hash password.");
+                    return;
+                }
+                u.passwordHash = hashedPw;
                 m_db.updateUser(u);
                 QMessageBox::information(this, "Account", "Password changed.");
                 break;
@@ -1475,7 +2289,32 @@ void MainWindow::on_btnDeleteAccount_clicked()
 
 void MainWindow::on_actionPreferences_triggered()
 {
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(13); // Preferences page
+    if (!checkLoginRequired()) return;   // all roles (keybinds toggle)
+    goToPage(13); // Preferences page
+
+    // Currency switching is SuperAdmin-only
+    bool canChangeCurrency = getCurrentUserRole() == Domain::User::Role::SuperAdmin;
+    if (ui->cboCurrency_pref) ui->cboCurrency_pref->setEnabled(canChangeCurrency);
+    if (ui->btnConvertPrices_pref) ui->btnConvertPrices_pref->setEnabled(canChangeCurrency);
+    if (ui->lblCurrencyHint_pref) {
+        ui->lblCurrencyHint_pref->setText(canChangeCurrency
+            ? Tr::trS("Switching currency does not convert prices.")
+            : Tr::trS("Only SuperAdmin can change the currency."));
+    }
+
+    // Sync the combo boxes / checkboxes with the saved settings
+    QSettings settings("QMark", "SchoolShop");
+    if (ui->cboLanguage_pref) {
+        QString lang = settings.value("settings/language", "pl").toString();
+        ui->cboLanguage_pref->setCurrentIndex(lang == "pl" ? 1 : 0);
+    }
+    if (ui->cboCurrency_pref) {
+        QString cur = settings.value("settings/currency", "PLN").toString();
+        ui->cboCurrency_pref->setCurrentIndex(cur == "USD" ? 1 : 0);
+    }
+    if (ui->chkKeybinds_pref) {
+        ui->chkKeybinds_pref->setChecked(m_keybindsEnabled);
+    }
 }
 
 void MainWindow::on_btnSavePreferences_clicked()
@@ -1483,16 +2322,92 @@ void MainWindow::on_btnSavePreferences_clicked()
     QSettings settings("QMark", "SchoolShop");
     settings.setValue("worklog/enabled", ui->chkWorklog->isChecked());
     settings.setValue("telemetry/enabled", ui->chkTelemetry->isChecked());
-    QMessageBox::information(this, "Preferences", "Preferences saved.");
+    settings.setValue("settings/sellKeybinds", ui->chkKeybinds_pref->isChecked());
+
+    // Language (all roles)
+    QString lang = (ui->cboLanguage_pref && ui->cboLanguage_pref->currentIndex() == 1) ? "pl" : "en";
+    settings.setValue("settings/language", lang);
+
+    // Currency (SuperAdmin only)
+    QString currency = (ui->cboCurrency_pref && ui->cboCurrency_pref->currentIndex() == 1) ? "USD" : "PLN";
+    if (getCurrentUserRole() == Domain::User::Role::SuperAdmin) {
+        settings.setValue("settings/currency", currency);
+    } else {
+        currency = settings.value("settings/currency", "PLN").toString();
+    }
+    Domain::setCurrencySymbol(currency == "USD" ? "$" : "zł");
+
+    m_keybindsEnabled = ui->chkKeybinds_pref->isChecked();
+    if (ui->chkKeybinds_sell) {
+        ui->chkKeybinds_sell->blockSignals(true);
+        ui->chkKeybinds_sell->setChecked(m_keybindsEnabled);
+        ui->chkKeybinds_sell->blockSignals(false);
+    }
+
+    applyLanguageToUi();
+    refreshSellPage();
+    refreshDashboard();
+
+    QMessageBox::information(this, Tr::trS("Preferences"), Tr::trS("Preferences saved."));
 }
 
 void MainWindow::on_btnResetPreferences_clicked()
 {
     QSettings settings("QMark", "SchoolShop");
+
+    // Keep the database paths, reset everything else
+    QString itemsPath = settings.value("db/itemsPath").toString();
+    QString usersPath = settings.value("db/usersPath").toString();
     settings.clear();
+    if (!itemsPath.isEmpty()) settings.setValue("db/itemsPath", itemsPath);
+    if (!usersPath.isEmpty()) settings.setValue("db/usersPath", usersPath);
+
+    // Restore defaults in the UI
+    Domain::setCurrencySymbol("zł");
+    m_keybindsEnabled = true;
     ui->chkWorklog->setChecked(false);
     ui->chkTelemetry->setChecked(false);
-    QMessageBox::information(this, "Preferences", "Preferences reset to defaults.");
+    if (ui->chkKeybinds_pref) ui->chkKeybinds_pref->setChecked(true);
+    if (ui->chkKeybinds_sell) {
+        ui->chkKeybinds_sell->blockSignals(true);
+        ui->chkKeybinds_sell->setChecked(true);
+        ui->chkKeybinds_sell->blockSignals(false);
+    }
+    if (ui->cboLanguage_pref) ui->cboLanguage_pref->setCurrentIndex(1); // Polski
+    if (ui->cboCurrency_pref) ui->cboCurrency_pref->setCurrentIndex(0); // PLN
+
+    applyLanguageToUi();
+    refreshSellPage();
+    refreshDashboard();
+
+    QMessageBox::information(this, Tr::trS("Preferences"), Tr::trS("Preferences reset to defaults."));
+}
+
+// Explicit price conversion (SuperAdmin only). Switching the currency in
+// Preferences does NOT convert stored prices; this button does, using a
+// user-provided factor (e.g. 1 PLN = 0.25 USD → factor 0.25).
+void MainWindow::on_btnConvertPrices_pref_clicked()
+{
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) return;
+
+    bool ok = false;
+    double rate = QInputDialog::getDouble(this, Tr::trS("Convert All Prices..."),
+        Tr::trS("Enter conversion factor (new price = old price × factor):"),
+        1.0, 0.0001, 1000000.0, 4, &ok);
+    if (!ok || rate <= 0.0) return;
+
+    auto items = m_db.getAllItems();
+    for (auto& it : items) {
+        it.price = it.price * rate;
+        it.updatedAt = Domain::now();
+        m_db.updateItem(it);
+    }
+
+    LOG_INFO("Prices converted with factor " + QString::number(rate));
+    QMessageBox::information(this, Tr::trS("Convert All Prices..."),
+        QString::number(items.size()) + " " + Tr::trS("item(s) updated."));
+    refreshSellPage();
+    refreshDashboard();
 }
 
 void MainWindow::on_chkWorklog_toggled(bool checked)
@@ -1511,7 +2426,7 @@ void MainWindow::on_chkWorklog_toggled(bool checked)
 void MainWindow::on_actionWorklogStats_triggered()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(14); // Worklog page
+    goToPage(14); // Worklog page
     on_btnRefreshWorklog_clicked();
 }
 
@@ -1561,43 +2476,55 @@ void MainWindow::on_btnExportWorklog_clicked()
 void MainWindow::on_actionTroubleshoot_triggered()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
-    if (ui->stackedWidget) ui->stackedWidget->setCurrentIndex(15); // Troubleshoot page
+    goToPage(15); // Troubleshoot page
 }
 
 void MainWindow::on_btnTestDbConnection_clicked()
 {
     if (m_db.isConnected()) {
-        QMessageBox::information(this, "DB Test", "Connected.");
+        QMessageBox::information(this, Tr::trS("DB Test"), Tr::trS("Connected."));
     } else {
-        QMessageBox::warning(this, "DB Test", "Not connected.");
+        QMessageBox::warning(this, Tr::trS("DB Test"), Tr::trS("Not connected."));
     }
 }
 
 void MainWindow::on_btnViewLogs_clicked()
 {
     QString logDir = QDir::currentPath();
-    QMessageBox::information(this, "Logs", "Log files are located in:\n" + logDir);
+    QMessageBox::information(this, Tr::trS("Logs"),
+        Tr::trS("Log files are located in:") + "\n" + logDir);
 }
 
 void MainWindow::on_btnExportDiagnostics_clicked()
 {
-    QString fileName = QFileDialog::getSaveFileName(this, "Export Diagnostics", "diagnostics.txt", "Text Files (*.txt)");
+    // Timestamped default name, e.g. diagnostics_20260918_153012.txt
+    QString defaultName = "diagnostics_"
+        + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".txt";
+    QString fileName = QFileDialog::getSaveFileName(this, Tr::trS("Export Diagnostics"),
+        defaultName, Tr::trS("Text Files") + " (*.txt)");
     if (fileName.isEmpty()) return;
 
     QFile file(fileName);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
 
+    // Diagnostics content follows the selected UI language.
     QTextStream out(&file);
-    out << "=== QMark Diagnostics ===\n";
-    out << "Date: " << QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") << "\n";
-    out << "DB Connected: " << (m_db.isConnected() ? "Yes" : "No") << "\n";
-    out << "Logged In: " << (m_isLoggedIn ? "Yes" : "No") << "\n";
+    out << Tr::trS("=== QMark Diagnostics ===") << "\n";
+    out << Tr::trS("Date: ") << QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") << "\n";
+    out << Tr::trS("DB Connected: ")
+        << (m_db.isConnected() ? Tr::trS("Yes") : Tr::trS("No")) << "\n";
+    out << Tr::trS("Logged In: ")
+        << (m_isLoggedIn ? Tr::trS("Yes") : Tr::trS("No")) << "\n";
     if (m_currentUser.has_value()) {
-        out << "User: " << QString::fromStdString(m_currentUser->username) << "\n";
-        out << "Role: " << QString::fromStdString(m_currentUser->roleName()) << "\n";
+        out << Tr::trS("User: ") << QString::fromStdString(m_currentUser->username) << "\n";
+        out << Tr::trS("Role: ") << QString::fromStdString(m_currentUser->roleName()) << "\n";
     }
-    out << "Telemetry: " << (AppLogger::instance().isTelemetryEnabled() ? "On" : "Off") << "\n";
-    out << "Worklog: " << (m_worklog.isEnabled() ? "On" : "Off") << "\n";
+    out << Tr::trS("Telemetry: ")
+        << (AppLogger::instance().isTelemetryEnabled() ? Tr::trS("On") : Tr::trS("Off")) << "\n";
+    out << Tr::trS("Worklog: ")
+        << (m_worklog.isEnabled() ? Tr::trS("On") : Tr::trS("Off")) << "\n";
+    out << Tr::trS("Currency: ") << QString::fromStdString(Domain::currencySymbol()) << "\n";
+    out << Tr::trS("Language: ") << Tr::language() << "\n";
     file.close();
-    QMessageBox::information(this, "Diagnostics", "Diagnostics exported.");
+    QMessageBox::information(this, Tr::trS("Export Diagnostics"), Tr::trS("Diagnostics exported."));
 }
