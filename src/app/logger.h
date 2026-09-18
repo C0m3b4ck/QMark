@@ -35,9 +35,25 @@ public:
         }
     }
 
+    // Remember who is operating so telemetry lines carry the user.
+    void setUser(const QString& username, const QString& role) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_username = username;
+        m_role = role;
+    }
+
+    void clearUser() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_username.clear();
+        m_role.clear();
+    }
+
     void log(const QString& tag, const QString& message) {
         QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
-        QString entry = QString("[%1] [%2] %3").arg(timestamp, tag, message);
+        QString user = m_username.isEmpty() ? "-" : m_username;
+        QString role = m_role.isEmpty() ? "-" : m_role;
+        QString entry = QString("[%1] [%2] [user: %3] [role: %4] %5")
+            .arg(timestamp, tag, user, role, message);
 
         qDebug().noquote() << entry;
 
@@ -72,6 +88,8 @@ private:
     std::unique_ptr<QFile> m_logFile;
     std::unique_ptr<QTextStream> m_stream;
     std::mutex m_mutex;
+    QString m_username;
+    QString m_role;
 };
 
 #define LOG_TAG(tag, msg) AppLogger::instance().log(tag, msg)

@@ -52,6 +52,7 @@ private slots:
     void on_chkHide_login_toggled(bool checked);
     void on_chkHide_register_toggled(bool checked);
     void on_txtPassword1_register_textChanged(const QString &text);
+    void on_btnHelp_role_register_clicked();
 
     // ── Menu ──────────────────────────────────────────────────────
     void on_actionClose_triggered();
@@ -92,6 +93,7 @@ private slots:
     void on_actionSell_Item_triggered();
     void on_btnSearch_sell_page_clicked();
     void on_chkKeybinds_sell_toggled(bool checked);
+    void on_chkSimpleView_sell_toggled(bool checked);
     void on_btnRefreshSalesLog_sell_clicked();
     void on_btnUndoSale_sell_clicked();
 
@@ -211,6 +213,7 @@ private:
     QWidget* createItemCard(const Domain::Item& item);
     void refreshSellPage();
     void refreshSalesLog();
+    void refreshSellStats();
     void highlightSellCard(int index);
     bool sellProductAtIndex(int index);
     void undoSaleById(const QString& saleId);

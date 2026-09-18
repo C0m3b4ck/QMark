@@ -17,29 +17,22 @@ struct TelemetryEntry {
     QString timestamp;
     QString tag;       // INFO, CLICK, WARN, ERROR, SALE, etc.
     QString message;
-
-    QString toCsvLine() const {
-        return timestamp + "," + tag + "," + message;
-    }
-
-    static QString csvHeader() {
-        return "Timestamp,Tag,Message";
-    }
+    QString username;  // operating user ("" when none logged in)
+    QString role;
 };
 
-// ── Dual telemetry writer: CSV file + SQLite DB ────────────────────
+// ── Telemetry writer: SQLite DB (no CSV files) ─────────────────────
 class TelemetryStore {
 public:
     TelemetryStore() = default;
 
-    // Open both sinks. Call once at startup.
-    void open(const QString& csvPath, const QString& dbPath) {
+    // Open the SQLite sink. Call once at startup.
+    void open(const QString& dbPath) {
         std::lock_guard<std::mutex> lock(m_mutex);
-        openCsv(csvPath);
         openDb(dbPath);
     }
 
-    // Append a single entry to both sinks.
+    // Append a single entry to the sink (with the current user context).
     void write(const QString& tag, const QString& message) {
         std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -47,26 +40,38 @@ public:
         entry.timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
         entry.tag = tag;
         entry.message = message;
+        entry.username = m_username;
+        entry.role = m_role;
 
-        // CSV
-        if (m_csvFile && m_csvFile->isOpen() && m_csvStream) {
-            *m_csvStream << entry.toCsvLine() << "\n";
-            m_csvStream->flush();
-        }
-
-        // SQLite
         if (m_db) {
             try {
                 SQLite::Statement stmt(*m_db,
-                    "INSERT INTO telemetry (timestamp, tag, message) VALUES (?, ?, ?)");
+                    "INSERT INTO telemetry (timestamp, tag, message, user, role) "
+                    "VALUES (?, ?, ?, ?, ?)");
                 stmt.bind(1, entry.timestamp.toStdString());
                 stmt.bind(2, entry.tag.toStdString());
                 stmt.bind(3, entry.message.toStdString());
+                stmt.bind(4, entry.username.toStdString());
+                stmt.bind(5, entry.role.toStdString());
                 stmt.exec();
             } catch (const std::exception&) {
                 // Swallow — telemetry must never crash the app
             }
         }
+    }
+
+    // Remember who is operating so every entry carries their username
+    // and role automatically.
+    void setUser(const QString& username, const QString& role) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_username = username;
+        m_role = role;
+    }
+
+    void clearUser() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_username.clear();
+        m_role.clear();
     }
 
     // Convenience wrappers
@@ -78,27 +83,12 @@ public:
 
     void close() {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_csvStream) { m_csvStream->flush(); m_csvStream.reset(); }
-        if (m_csvFile && m_csvFile->isOpen()) m_csvFile->close();
-        m_csvFile.reset();
         m_db.reset();
     }
 
     ~TelemetryStore() { close(); }
 
 private:
-    void openCsv(const QString& path) {
-        m_csvFile = std::make_unique<QFile>(path);
-        if (m_csvFile->open(QIODevice::Append | QIODevice::Text)) {
-            m_csvStream = std::make_unique<QTextStream>(m_csvFile.get());
-            // Write header if file is empty
-            if (m_csvFile->size() == 0) {
-                *m_csvStream << TelemetryEntry::csvHeader() << "\n";
-                m_csvStream->flush();
-            }
-        }
-    }
-
     void openDb(const QString& path) {
         try {
             m_db = std::make_unique<SQLite::Database>(path.toStdString(),
@@ -108,7 +98,9 @@ private:
                 "id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 "timestamp TEXT NOT NULL,"
                 "tag TEXT NOT NULL,"
-                "message TEXT NOT NULL"
+                "message TEXT NOT NULL,"
+                "user TEXT,"
+                "role TEXT"
                 ");"
             );
             m_db->exec("CREATE INDEX IF NOT EXISTS idx_telemetry_tag ON telemetry(tag);");
@@ -118,10 +110,10 @@ private:
         }
     }
 
-    std::unique_ptr<QFile>         m_csvFile;
-    std::unique_ptr<QTextStream>   m_csvStream;
     std::unique_ptr<SQLite::Database> m_db;
-    std::mutex                     m_mutex;
+    std::mutex                        m_mutex;
+    QString                           m_username;
+    QString                           m_role;
 };
 
 // ── Global singleton accessor ───────────────────────────────────────

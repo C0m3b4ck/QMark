@@ -1403,6 +1403,110 @@
          </widget>
         </item>
         <item>
+         <widget class="QCheckBox" name="chkSimpleView_sell">
+          <property name="text">
+           <string>Simple view (show today's statistics)</string>
+          </property>
+          <property name="font">
+           <font>
+            <pointsize>12</pointsize>
+           </font>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QFrame" name="frameStats_sell">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>190</height>
+           </size>
+          </property>
+          <property name="visible">
+           <bool>false</bool>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">QFrame { background: white; border: 1px solid #e0e0e0; border-radius: 8px; }</string>
+          </property>
+          <layout class="QVBoxLayout" name="sellStatsLayout">
+           <item>
+            <widget class="QLabel" name="lblStatsTitle_sell">
+             <property name="text">
+              <string>TODAY'S STATISTICS</string>
+             </property>
+             <property name="font">
+              <font>
+               <pointsize>13</pointsize>
+               <weight>75</weight>
+               <bold>true</bold>
+              </font>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblStatSales_sell">
+             <property name="text">
+              <string>Sales: 0</string>
+             </property>
+             <property name="font">
+              <font>
+               <pointsize>12</pointsize>
+              </font>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblStatRevenue_sell">
+             <property name="text">
+              <string>Revenue: 0,00 zł</string>
+             </property>
+             <property name="font">
+              <font>
+               <pointsize>12</pointsize>
+              </font>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblStatItems_sell">
+             <property name="text">
+              <string>Items sold: 0</string>
+             </property>
+             <property name="font">
+              <font>
+               <pointsize>12</pointsize>
+              </font>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblStatTop_sell">
+             <property name="text">
+              <string>Top item: -</string>
+             </property>
+             <property name="font">
+              <font>
+               <pointsize>12</pointsize>
+              </font>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="lblStatTrend_sell">
+             <property name="text">
+              <string>Trend: -</string>
+             </property>
+             <property name="font">
+              <font>
+               <pointsize>12</pointsize>
+              </font>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
          <widget class="QFrame" name="frameSalesLog_sell">
           <property name="minimumSize">
            <size>
@@ -2593,6 +2697,42 @@
                 <widget class="QPushButton" name="btnClear_password1_register">
                  <property name="text">
                   <string>Clear</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="pwdStrengthLayout">
+               <item>
+                <widget class="QProgressBar" name="pwdStrength_register">
+                 <property name="minimumSize">
+                  <size>
+                   <width>0</width>
+                   <height>16</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>16777215</width>
+                   <height>16</height>
+                  </size>
+                 </property>
+                 <property name="maximum">
+                  <number>4</number>
+                 </property>
+                 <property name="value">
+                  <number>0</number>
+                 </property>
+                 <property name="textVisible">
+                  <bool>false</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="lblPwdStrength_register">
+                 <property name="text">
+                  <string>Password strength</string>
                  </property>
                 </widget>
                </item>

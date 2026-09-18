@@ -18,6 +18,8 @@ struct WorklogEntry {
     std::string entityId;
     std::string description;
     std::string timestamp;
+    std::string username;   // operating user ("" when none logged in)
+    std::string role;       // operating user's role
 
     QString actionStr() const {
         switch (action) {
@@ -41,11 +43,15 @@ struct WorklogEntry {
     }
 
     QString toLogString() const {
-        return QString("[%1] [%2] [%3] ID:%4 %5")
+        QString userStr = username.empty() ? "-" : QString::fromStdString(username);
+        QString roleStr = role.empty() ? "-" : QString::fromStdString(role);
+        return QString("[%1] [%2] [%3] ID:%4 User:%5 (Role: %6) %7")
             .arg(QString::fromStdString(timestamp))
             .arg(actionStr())
             .arg(entityStr())
             .arg(QString::fromStdString(entityId))
+            .arg(userStr)
+            .arg(roleStr)
             .arg(QString::fromStdString(description));
     }
 };
@@ -59,6 +65,20 @@ public:
 
     void setSessionStart(const QDateTime& start) { m_sessionStart = start; }
     QDateTime getSessionStart() const { return m_sessionStart; }
+
+    // Remember who is operating so every entry records their username
+    // and role automatically (no per-entry plumbing needed).
+    void setUser(const std::string& username, const std::string& role) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_username = username;
+        m_role = role;
+    }
+
+    void clearUser() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_username.clear();
+        m_role.clear();
+    }
 
     void setLogFile(const QString& path) {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -84,6 +104,8 @@ public:
         entry.entityId = entityId;
         entry.description = description;
         entry.timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz").toStdString();
+        entry.username = m_username;
+        entry.role = m_role;
 
         m_entries.push_back(entry);
 
@@ -162,6 +184,8 @@ private:
     std::unique_ptr<QTextStream> m_stream;
     std::mutex m_mutex;
     QDateTime m_sessionStart = QDateTime::currentDateTime();
+    std::string m_username;   // current operator (set via setUser())
+    std::string m_role;
 };
 
 #endif // WORKLOG_H

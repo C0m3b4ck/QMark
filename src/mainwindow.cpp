@@ -21,6 +21,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QSpinBox>
+#include <QProgressBar>
 #include <QMenu>
 #include <QMenuBar>
 #include <QAction>
@@ -37,6 +38,8 @@
 #include <sstream>
 #include <iomanip>
 #include <memory>
+#include <map>
+#include <algorithm>
 
 // ── Currency-aware money formatting (UI side) ──────────────────────
 static QString fmtMoney(double value)
@@ -93,10 +96,14 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     bool telemetryEnabled = settings.value("telemetry/enabled", false).toBool();
     ui->chkTelemetry->setChecked(telemetryEnabled);
     if (telemetryEnabled) {
-        QString logPath = QDir::currentPath() + "/telemetry_"
-            + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".log";
         AppLogger::instance().setTelemetryEnabled(true);
+        QString ts = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+        QString telDir = QDir::currentPath() + "/telemetry";
+        QDir().mkpath(telDir);
+        QString logPath = telDir + "/telemetry_" + ts + ".log";
+        QString dbPath  = telDir + "/telemetry_" + ts + ".db";
         AppLogger::instance().setLogFile(logPath);
+        telemetry().open(dbPath);
     }
 
     bool worklogEnabled = settings.value("worklog/enabled", false).toBool();
@@ -371,6 +378,20 @@ void MainWindow::goToPage(int index)
         if (index != 0 && index != 6) return; // clerk: blocked
     }
 
+    // No leftover credentials: clear the form fields every time the
+    // login / register pages are (re)loaded.
+    if (index == 0) { // login page
+        if (ui->txtUsername_login) ui->txtUsername_login->clear();
+        if (ui->txtPassword_login) ui->txtPassword_login->clear();
+        if (ui->chkHide_login)     ui->chkHide_login->setChecked(false);
+    } else if (index == 16) { // register page
+        if (ui->txtUsername_register)  ui->txtUsername_register->clear();
+        if (ui->txtPassword1_register) ui->txtPassword1_register->clear();
+        if (ui->txtPassword2_register) ui->txtPassword2_register->clear();
+        if (ui->chkHide_register)      ui->chkHide_register->setChecked(false);
+        on_txtPassword1_register_textChanged(QString()); // reset strength bar
+    }
+
     ui->stackedWidget->setCurrentIndex(index);
 }
 
@@ -406,6 +427,8 @@ void MainWindow::applyLanguageToUi()
     if (m_firstRunPage) Tr::applyLanguage(m_firstRunPage);
     updatePricePlaceholders();
     syncLanguageUi();
+    // Keep the (optional) POS simple-view statistics in the new language.
+    if (ui->frameStats_sell && ui->frameStats_sell->isVisible()) refreshSellStats();
 }
 
 // Keep the Language menu (and the Preferences language combo) in sync
@@ -427,6 +450,14 @@ void MainWindow::syncLanguageUi()
         ui->cboLanguage_pref->blockSignals(true);
         ui->cboLanguage_pref->setCurrentIndex(lang == "pl" ? 1 : 0);
         ui->cboLanguage_pref->blockSignals(false);
+    }
+    // Role names in the registration combo are UI labels, so translate
+    // them from the canonical English values (indexes stay the same).
+    if (ui->cboRole_register) {
+        const QString canonical[3] = { "Clerk", "Admin", "SuperAdmin" };
+        for (int i = 0; i < 3 && i < ui->cboRole_register->count(); ++i) {
+            ui->cboRole_register->setItemText(i, Tr::trS(canonical[i]));
+        }
     }
 }
 
@@ -521,6 +552,13 @@ void MainWindow::on_btnLogin_clicked()
 
     LOG_INFO("User logged in: " + username);
 
+    // Record who is operating so worklog/telemetry entries carry the user.
+    QString uname = QString::fromStdString(user->username);
+    QString role  = QString::fromStdString(user->roleName());
+    m_worklog.setUser(uname.toStdString(), role.toStdString());
+    AppLogger::instance().setUser(uname, role);
+    telemetry().setUser(uname, role);
+
     applyRoleRestrictions();
 
     // Clerks land directly on the sell page (only menu they can use)
@@ -585,6 +623,16 @@ void MainWindow::on_btnClear_username_register_clicked() { ui->txtUsername_regis
 void MainWindow::on_btnClear_password1_register_clicked() { ui->txtPassword1_register->clear(); }
 void MainWindow::on_btnClear_password2_register_clicked() { ui->txtPassword2_register->clear(); }
 
+void MainWindow::on_btnHelp_role_register_clicked()
+{
+    QString info;
+    info += Tr::trS("Roles and their permissions:") + "\n\n";
+    info += "• " + Tr::trS("Clerk") + " — " + Tr::trS("Clerk role: can sell items, view the sales log and undo sales only.") + "\n";
+    info += "• " + Tr::trS("Admin") + " — " + Tr::trS("Admin role: manages items, shelves, categories, prices, reports and worklogs.") + "\n";
+    info += "• " + Tr::trS("SuperAdmin") + " — " + Tr::trS("SuperAdmin role: everything an Admin can do, plus user accounts, roles, passwords and currency.") + "\n";
+    QMessageBox::information(this, Tr::trS("Role Info"), info);
+}
+
 void MainWindow::on_chkHide_login_toggled(bool checked)
 {
     ui->txtPassword_login->setEchoMode(checked ? QLineEdit::PasswordEchoOnEdit : QLineEdit::Normal);
@@ -598,8 +646,44 @@ void MainWindow::on_chkHide_register_toggled(bool checked)
 
 void MainWindow::on_txtPassword1_register_textChanged(const QString& text)
 {
-    Q_UNUSED(text);
-    // Could add password strength indicator here
+    // Password strength meter: 0..4 based on length, case, digits, symbols.
+    int score = 0;
+    if (text.length() >= 8)  score++;           // long enough
+    if (text.length() >= 12) score++;           // very long
+    bool hasUpper = false, hasLower = false, hasDigit = false, hasSymbol = false;
+    for (const QChar& c : text) {
+        if (c.isUpper()) hasUpper = true;
+        else if (c.isLower()) hasLower = true;
+        else if (c.isDigit()) hasDigit = true;
+        else hasSymbol = true;
+    }
+    if (hasUpper && hasLower) score++;          // mixed case
+    if (hasDigit)             score++;          // contains a digit
+    if (hasSymbol)            score++;          // contains a symbol
+    if (score > 4) score = 4;
+    if (text.isEmpty()) score = 0;
+
+    if (ui->pwdStrength_register) {
+        ui->pwdStrength_register->setValue(score);
+        const char* chunkColor = score <= 1 ? "#c62828" :   // red
+                                 score == 2 ? "#ef6c00" :   // orange
+                                 score == 3 ? "#7cb342" :   // light green
+                                             "#2e7d32";     // green
+        ui->pwdStrength_register->setStyleSheet(
+            QString("QProgressBar { border: 1px solid #cccccc; border-radius: 7px; "
+                    "background: #eeeeee; } "
+                    "QProgressBar::chunk { background-color: %1; border-radius: 7px; }")
+                .arg(chunkColor));
+    }
+    if (ui->lblPwdStrength_register) {
+        QString label;
+        if (text.isEmpty())      label = Tr::trS("Password strength");
+        else if (score <= 1)     label = Tr::trS("Weak");
+        else if (score == 2)     label = Tr::trS("Medium");
+        else if (score == 3)     label = Tr::trS("Strong");
+        else                     label = Tr::trS("Very strong");
+        ui->lblPwdStrength_register->setText(label);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -611,6 +695,9 @@ void MainWindow::on_actionClose_triggered() { close(); }
 void MainWindow::on_actionLog_out_triggered()
 {
     LOG_INFO("User logged out: " + QString::fromStdString(m_currentUser.value_or(Domain::User{}).username));
+    m_worklog.clearUser();
+    AppLogger::instance().clearUser();
+    telemetry().clearUser();
     clearCurrentUser();
     applyRoleRestrictions();
     goToPage(0);
@@ -1142,7 +1229,11 @@ QWidget* MainWindow::buildResupplyPage()
     const int deltas[6] = { -10, -5, -1, 1, 5, 10 };
     QVector<QPushButton*> quickBtns;
     for (int i = 0; i < 6; ++i) {
-        QPushButton* b = new QPushButton(QString::number(deltas[i]));
+        // Positive buttons show "+N" (matching the "-N" removal buttons)
+        QString label = (deltas[i] > 0)
+            ? QString("+%1").arg(deltas[i])
+            : QString::number(deltas[i]);
+        QPushButton* b = new QPushButton(label);
         b->setMinimumHeight(46);
         b->setCursor(Qt::PointingHandCursor);
         QFont f = b->font();
@@ -1376,6 +1467,77 @@ void MainWindow::refreshSellPage()
     auto items = m_db.getAllItems();
     rebuildItemGrid(items);
     refreshSalesLog();
+    refreshSellStats();
+}
+
+// Simple-view statistics for the POS page: today's totals.
+void MainWindow::refreshSellStats()
+{
+    if (!ui->frameStats_sell) return;
+    if (!ui->frameStats_sell->isVisible()) return; // hidden unless simple view on
+
+    auto sales  = m_db.getAllSales();
+    auto items  = m_db.getAllItems();
+    QString today = QDate::currentDate().toString("yyyy-MM-dd");
+
+    double revenue = 0.0;
+    int transactions = 0, itemsSold = 0;
+    std::map<QString, int> qtyByItem;   // itemId -> total sold today
+    std::map<QString, double> revByItem;
+    QString topId;
+    int topQty = 0;
+
+    for (const auto& s : sales) {
+        QString date = QString::fromStdString(Domain::toISOString(s.saleDate)).left(10);
+        if (date != today) continue;
+        transactions++;
+        revenue += s.totalAmount;
+        itemsSold += s.quantitySold;
+        qtyByItem[QString::fromStdString(s.itemId)] += s.quantitySold;
+        revByItem[QString::fromStdString(s.itemId)] += s.totalAmount;
+    }
+    for (auto it = qtyByItem.begin(); it != qtyByItem.end(); ++it) {
+        if (it->second > topQty) { topQty = it->second; topId = it->first; }
+    }
+
+    QString topName = "-";
+    if (!topId.isEmpty()) {
+        for (const auto& it : items) {
+            if (QString::fromStdString(it.id) == topId) {
+                topName = QString::fromStdString(it.name) + " (x" + QString::number(topQty) + ")";
+                break;
+            }
+        }
+    }
+
+    ui->lblStatSales_sell->setText(Tr::trS("Sales: ") + QString::number(transactions));
+    ui->lblStatRevenue_sell->setText(Tr::trS("Revenue: ") + fmtMoney(revenue));
+    ui->lblStatItems_sell->setText(Tr::trS("Items sold: ") + QString::number(itemsSold));
+    ui->lblStatTop_sell->setText(Tr::trS("Top item: ") + topName);
+
+    // Trend vs yesterday (UTC dates, same as sale timestamps).
+    QString trend = Tr::trS("Trend: -");
+    double yRevenue = 0.0;
+    QString yesterday = QDate::currentDate().addDays(-1).toString("yyyy-MM-dd");
+    for (const auto& s : sales) {
+        QString date = QString::fromStdString(Domain::toISOString(s.saleDate)).left(10);
+        if (date == yesterday) yRevenue += s.totalAmount;
+    }
+    if (yRevenue > 0.0) {
+        double pct = ((revenue - yRevenue) / yRevenue) * 100.0;
+        trend = Tr::trS("Trend: ") + QString("%1% ").arg(pct, 0, 'f', 1) + Tr::trS("vs yesterday");
+    } else if (revenue > 0.0) {
+        trend = Tr::trS("Trend: ") + Tr::trS("no sales yesterday");
+    }
+    ui->lblStatTrend_sell->setText(trend);
+}
+
+void MainWindow::on_chkSimpleView_sell_toggled(bool checked)
+{
+    bool simple = checked && ui->chkSimpleView_sell && ui->chkSimpleView_sell->isChecked();
+    if (ui->frameSalesLog_sell) ui->frameSalesLog_sell->setVisible(!simple);
+    if (ui->frameStats_sell)    ui->frameStats_sell->setVisible(simple);
+    if (simple) refreshSellStats();
 }
 
 void MainWindow::on_btnSearch_sell_page_clicked()
@@ -2049,31 +2211,121 @@ void MainWindow::on_btnGenerateReport_clicked()
 
     auto sales = m_db.getAllSales();
     auto items = m_db.getAllItems();
+    auto users = m_db.getAllUsers();
+    std::unordered_map<std::string, std::string> itemNames;
+    for (const auto& it : items) itemNames[it.id] = it.name;
+    std::unordered_map<std::string, std::string> userNames;
+    for (const auto& u : users) userNames[u.id] = u.username;
 
     double totalRevenue = 0.0;
     int totalItemsSold = 0;
+    std::map<QString, int> qtyByItem;          // itemId -> qty
+    std::map<QString, double> revByItem;       // itemId -> revenue
+    std::map<QString, double> revByDay;        // "yyyy-MM-dd" -> revenue
+    std::map<std::string, std::pair<int, double>> bySeller; // sellerId -> (tx, revenue)
+
     for (const auto& s : sales) {
         totalRevenue += s.totalAmount;
         totalItemsSold += s.quantitySold;
+        QString iid = QString::fromStdString(s.itemId);
+        qtyByItem[iid] += s.quantitySold;
+        revByItem[iid] += s.totalAmount;
+        revByDay[QString::fromStdString(Domain::toISOString(s.saleDate)).left(10)] += s.totalAmount;
+        auto& sel = bySeller[s.soldBy];
+        sel.first++;
+        sel.second += s.totalAmount;
     }
 
     QString report;
     report += "═══════════════════════════════════════\n";
-    report += "         QMARK — SALES REPORT\n";
+    report += "         QMARK — " + Tr::trS("SALES REPORT") + "\n";
     report += "═══════════════════════════════════════\n";
-    report += "Generated: " + QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") + "\n\n";
-    report += "Total Revenue: " + fmtMoney(totalRevenue) + "\n";
-    report += "Total Transactions: " + QString::number(sales.size()) + "\n";
-    report += "Total Items Sold: " + QString::number(totalItemsSold) + "\n\n";
+    report += Tr::trS("Generated: ") + QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") + "\n\n";
+    report += Tr::trS("Total Revenue: ") + fmtMoney(totalRevenue) + "\n";
+    report += Tr::trS("Total Transactions: ") + QString::number(sales.size()) + "\n";
+    report += Tr::trS("Total Items Sold: ") + QString::number(totalItemsSold) + "\n\n";
 
-    report += "Items in stock: " + QString::number(items.size()) + "\n";
+    report += Tr::trS("Items in stock: ") + QString::number(items.size()) + "\n";
     int lowStock = 0, outOfStock = 0;
+    QStringList lowStockList;
     for (const auto& item : items) {
-        if (item.status == "Low Stock") lowStock++;
+        if (item.status == "Low Stock") { lowStock++; lowStockList << QString::fromStdString(item.name); }
         if (item.status == "Out of Stock" || item.status == "Sold Out") outOfStock++;
     }
-    report += "Low Stock: " + QString::number(lowStock) + "\n";
-    report += "Out of Stock: " + QString::number(outOfStock) + "\n";
+    report += Tr::trS("Low Stock: ") + QString::number(lowStock) + "\n";
+    report += Tr::trS("Out of Stock: ") + QString::number(outOfStock) + "\n\n";
+
+    // ── Trends ─────────────────────────────────────────────────
+    report += "───────────────────────────────────────\n";
+    report += Tr::trS("TRENDS") + "\n";
+    report += "───────────────────────────────────────\n";
+
+    // Revenue trend: last 7 days
+    report += Tr::trS("Revenue by day (last 7 days):") + "\n";
+    QDate todayUtc = QDate::currentDate();
+    bool anyDay = false;
+    for (int d = 6; d >= 0; --d) {
+        QString day = todayUtc.addDays(-d).toString("yyyy-MM-dd");
+        double dayRev = revByDay[day];
+        if (dayRev <= 0.0 && d != 0) continue;
+        anyDay = true;
+        report += QString("  %1  %2\n").arg(day).arg(dayRev > 0.0 ? fmtMoney(dayRev) : fmtMoney(0.0));
+    }
+    if (!anyDay && revByDay.empty()) report += Tr::trS("  (no sales recorded yet)") + "\n";
+    double yRev = revByDay[todayUtc.addDays(-1).toString("yyyy-MM-dd")];
+    if (yRev > 0.0 && revByDay[todayUtc.toString("yyyy-MM-dd")] > 0.0) {
+        double pct = ((revByDay[todayUtc.toString("yyyy-MM-dd")] - yRev) / yRev) * 100.0;
+        report += Tr::trS("Trend vs yesterday: ") + QString("%1%").arg(pct, 0, 'f', 1) +
+                  (pct >= 0.0 ? " " + Tr::trS("(up)") : " " + Tr::trS("(down)")) + "\n";
+    } else if (revByDay[todayUtc.toString("yyyy-MM-dd")] > 0.0) {
+        report += Tr::trS("Trend: no sales yesterday (new activity today)") + "\n";
+    }
+    report += "\n";
+
+    // Top selling items
+    report += Tr::trS("Top selling items:") + "\n";
+    if (qtyByItem.empty()) {
+        report += Tr::trS("  (no sales yet)") + "\n";
+    } else {
+        std::vector<std::pair<QString, int>> ranked(qtyByItem.begin(), qtyByItem.end());
+        std::sort(ranked.begin(), ranked.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
+        int shown = 0;
+        for (const auto& p : ranked) {
+            if (++shown > 5) break;
+            QString name = itemNames.count(p.first.toStdString())
+                ? QString::fromStdString(itemNames[p.first.toStdString()]) : p.first;
+            report += QString("  %1. %2 — %3 ").arg(shown).arg(name).arg(p.second) +
+                      Tr::trS("pcs, ") + fmtMoney(revByItem[p.first]) + "\n";
+        }
+    }
+    report += "\n";
+
+    // Top sellers (staff)
+    report += Tr::trS("Top sellers (staff):") + "\n";
+    if (bySeller.empty()) {
+        report += Tr::trS("  (no sales yet)") + "\n";
+    } else {
+        std::vector<std::pair<std::string, std::pair<int, double>>> sellers(bySeller.begin(), bySeller.end());
+        std::sort(sellers.begin(), sellers.end(),
+            [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+        int shown = 0;
+        for (const auto& s : sellers) {
+            if (++shown > 3) break;
+            QString name = userNames.count(s.first)
+                ? QString::fromStdString(userNames[s.first]) : QString::fromStdString(s.first);
+            report += QString("  %1. %2 — %3 ").arg(shown).arg(name).arg(s.second.first) +
+                      Tr::trS("tx, ") + fmtMoney(s.second.second) + "\n";
+        }
+    }
+    report += "\n";
+
+    // Low stock warnings
+    if (!lowStockList.isEmpty()) {
+        report += Tr::trS("Low stock items needing replenishment:") + "\n";
+        for (const QString& n : lowStockList) report += "  • " + n + "\n";
+        report += "\n";
+    }
 
     if (ui->txtReport) {
         ui->txtReport->setText(report);
@@ -2182,13 +2434,15 @@ void MainWindow::on_chkTelemetry_toggled(bool checked)
     settings.setValue("telemetry/enabled", checked);
     AppLogger::instance().setTelemetryEnabled(checked);
     if (checked) {
-        QString logDir = QDir::currentPath();
+        // Telemetry lives in the telemetry/ folder next to the app:
+        // a human-readable .log (all LOG_* events) plus a SQLite .db.
+        QString telDir = QDir::currentPath() + "/telemetry";
+        QDir().mkpath(telDir);
         QString ts = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        QString logPath = logDir + "/telemetry_" + ts + ".log";
-        QString csvPath = logDir + "/telemetry_" + ts + ".csv";
-        QString dbPath  = logDir + "/telemetry_" + ts + ".db";
+        QString logPath = telDir + "/telemetry_" + ts + ".log";
+        QString dbPath  = telDir + "/telemetry_" + ts + ".db";
         AppLogger::instance().setLogFile(logPath);
-        telemetry().open(csvPath, dbPath);
+        telemetry().open(dbPath);
         telemetry().logInfo("Telemetry enabled by user");
     } else {
         telemetry().logInfo("Telemetry disabled by user");
@@ -2414,8 +2668,14 @@ void MainWindow::on_chkWorklog_toggled(bool checked)
 {
     m_worklog.setEnabled(checked);
     if (checked) {
-        QString logPath = QDir::currentPath() + "/" + Worklog::generateSessionFileName();
+        // Worklogs live in the worklogs/ folder next to the app.
+        QString workDir = QDir::currentPath() + "/worklogs";
+        QDir().mkpath(workDir);
+        QString logPath = workDir + "/" + Worklog::generateSessionFileName();
         m_worklog.setLogFile(logPath);
+        m_worklogFilePath = logPath;
+    } else {
+        m_worklogFilePath.clear();
     }
 }
 

@@ -65,12 +65,15 @@ int main(int argc, char *argv[])
     // Telemetry via CLI flag
     if (a.arguments().contains("--telemetry")) {
         QString logDir = QCoreApplication::applicationDirPath();
-        QString csvPath = logDir + "/telemetry_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".csv";
-        QString dbPath  = logDir + "/telemetry_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".db";
+        QString telDir = logDir + "/telemetry";
+        QDir().mkpath(telDir);
+        QString ts = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+        QString logPath = telDir + "/telemetry_" + ts + ".log";
+        QString dbPath  = telDir + "/telemetry_" + ts + ".db";
         AppLogger::instance().setTelemetryEnabled(true);
-        AppLogger::instance().setLogFile(logDir + "/telemetry_" + QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss") + ".log");
-        telemetry().open(csvPath, dbPath);
-        qDebug() << "[TELEMETRY] Enabled via CLI flag, CSV:" << csvPath << " DB:" << dbPath;
+        AppLogger::instance().setLogFile(logPath);
+        telemetry().open(dbPath);
+        qDebug() << "[TELEMETRY] Enabled via CLI flag, LOG:" << logPath << " DB:" << dbPath;
     }
 
     // Load default databases from saved settings, or create new ones
