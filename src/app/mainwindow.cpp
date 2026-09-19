@@ -220,7 +220,6 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     connect(ui->btnSellNav, &QPushButton::clicked, this, &MainWindow::on_actionSell_Item_triggered);
     // Connect dashboard buttons
     connect(ui->btnDashboardSell, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
-    connect(ui->btnUndoSale, &QPushButton::clicked, this, &MainWindow::on_btnUndoSale_clicked);
     if (ui->btnStartSelling) {
         connect(ui->btnStartSelling, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
     }
@@ -1190,20 +1189,6 @@ void MainWindow::on_btnDashboardSell_clicked()
     on_actionSell_Item_triggered();
 }
 
-void MainWindow::on_btnUndoSale_clicked()
-{
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
-
-    auto sales = m_db.getAllSales();
-    if (sales.empty()) {
-        QMessageBox::information(this, Tr::trS("Undo Sale"), Tr::trS("No sales to undo."));
-        return;
-    }
-
-    // Undo the most recent sale (first in list since sorted DESC)
-    undoSaleById(QString::fromStdString(sales[0].id));
-}
-
 void MainWindow::on_lstRecentSales_itemClicked(QListWidgetItem *item)
 {
     Q_UNUSED(item);
@@ -1606,14 +1591,39 @@ void MainWindow::refreshSellStats()
 
     auto snap = Stats::compute(sales, itemNames, userNames);
 
-    QStringList soldLines;
+    // Compact per-product summary of today's sales. Instead of one line
+    // per transaction (which makes the stats panel grow unboundedly during
+    // a busy day), aggregate quantity and revenue per product and cap the
+    // list, so the panel keeps a stable, readable size.
+    struct SoldRun { int qty = 0; double revenue = 0.0; };
+    std::vector<std::pair<QString, SoldRun>> soldBy;      // first-seen order
     QString today = QDate::currentDate().toString("yyyy-MM-dd");
     for (const auto& s : sales) {
         if (saleDay(s) != today) continue;
         QString name = QString::fromStdString(itemNames.count(s.itemId) ? itemNames[s.itemId] : s.itemId);
-        if (s.quantitySold > 1) name = QString::number(s.quantitySold) + "× " + name;
-        soldLines << QString(Tr::trS("sold %1 for %2")).arg(name).arg(fmtMoney(s.totalAmount));
+        bool found = false;
+        for (auto& p : soldBy) {
+            if (p.first == name) {
+                p.second.qty += s.quantitySold;
+                p.second.revenue += s.totalAmount;
+                found = true;
+                break;
+            }
+        }
+        if (!found) soldBy.push_back({ name, { s.quantitySold, s.totalAmount } });
     }
+
+    QStringList soldLines;
+    const int kMaxSoldLines = 15;
+    int shown = 0;
+    for (const auto& p : soldBy) {
+        if (++shown > kMaxSoldLines) continue;
+        QString name = p.first;
+        if (p.second.qty > 1) name = QString::number(p.second.qty) + "× " + name;
+        soldLines << name + "  " + fmtMoney(p.second.revenue);
+    }
+    const int more = static_cast<int>(soldBy.size()) - kMaxSoldLines;
+    if (more > 0) soldLines << Tr::trS("… and %1 more").arg(more);
 
     ui->lblStatSales_sell->setText(Tr::trS("Sales: ") + QString::number(snap.todayTx));
     ui->lblStatRevenue_sell->setText(Tr::trS("Revenue: ") + fmtMoney(snap.todayRevenue));

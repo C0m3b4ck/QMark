@@ -177,7 +177,6 @@ private slots:
 
     // ── Dashboard ──────────────────────────────────────────────────
     void on_btnDashboardSell_clicked();
-    void on_btnUndoSale_clicked();
     void on_lstRecentSales_itemClicked(QListWidgetItem *item);
 
     // ── Troubleshoot ──────────────────────────────────────────────

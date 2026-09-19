@@ -535,32 +535,6 @@
                 </property>
                </widget>
               </item>
-              <item>
-               <widget class="QPushButton" name="btnUndoSale">
-                <property name="text">
-                 <string>UNDO SALE</string>
-                </property>
-                <property name="minimumSize">
-                 <size>
-                  <width>0</width>
-                  <height>80</height>
-                 </size>
-                </property>
-                <property name="font">
-                 <font>
-                  <pointsize>16</pointsize>
-                  <weight>75</weight>
-                  <bold>true</bold>
-                 </font>
-                </property>
-                <property name="styleSheet">
-                 <string notr="true">QPushButton { background-color: #c62828; color: white; border: none; border-radius: 10px; } QPushButton:hover { background-color: #8e0000; }</string>
-                </property>
-                <property name="cursor">
-                 <enum>Qt::PointingHandCursor</enum>
-                </property>
-               </widget>
-              </item>
              </layout>
             </item>
             <!-- Recent sales -->

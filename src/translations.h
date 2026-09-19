@@ -86,7 +86,7 @@ inline const QHash<QString, QString>& plDict()
         // ── Dashboard ────────────────────────────────────────────
         { "SELL", "SPRZEDAJ" },
         { "START SELLING", "ROZPOCZNIJ SPRZEDAŻ" },
-        { "UNDO SALE", "COFNIJ SPRZEDAŻ" },
+        
         { "Total Items", "Liczba przedmiotów" },
         { "Items Sold", "Sprzedano sztuk" },
         { "Revenue", "Przychód" },
@@ -144,6 +144,7 @@ inline const QHash<QString, QString>& plDict()
         { "vs yesterday", "w porównaniu z wczoraj" },
         { "no sales yesterday", "brak sprzedaży wczoraj" },
         { "sold %1 for %2", "Sprzedano %1 za %2" },
+        { "… and %1 more", "… i %1 więcej" },
         { "No sales today.", "Brak dzisiejszych sprzedaży." },
 
         // ── Categories page ──────────────────────────────────────
