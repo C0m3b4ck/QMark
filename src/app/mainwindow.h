@@ -127,6 +127,7 @@ private slots:
     void on_btnSearch_sales_clicked();
     void on_btnRefresh_sales_clicked();
     void on_btnExport_sales_clicked();
+    void on_chkSimpleView_sales_toggled(bool checked);
 
     // ── Undo ──────────────────────────────────────────────────────
     void on_actionUndo_Removed_Items_triggered();
@@ -138,6 +139,8 @@ private slots:
     void on_actionMake_Report_triggered();
     void on_btnGenerateReport_clicked();
     void on_btnExportReport_clicked();
+    void on_btnExportPdfReport_clicked();
+    void on_btnExitReport_clicked();
 
     // ── Database ──────────────────────────────────────────────────
     void on_actionDatabase_Selection_triggered();
@@ -218,6 +221,9 @@ private:
     bool sellProductAtIndex(int index);
     void undoSaleById(const QString& saleId);
     QString m_selectedSellItemId;
+
+    // ── Sales History helpers ─────────────────────────────────────
+    void populateSalesList(const std::vector<Domain::Sale>& sales);
 
     // Keybinds state (sell page)
     bool m_keybindsEnabled = true;

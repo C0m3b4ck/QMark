@@ -60,9 +60,11 @@ HEADERS += \
     domain.h \
     logger.h \
     mainwindow.h \
+    pdf_export.h \
     sqlite_dataaccess.h \
     statistics.h \
     telemetry.h \
+    translations.h \
     worklog.h
 
 FORMS += \

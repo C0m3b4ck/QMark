@@ -158,10 +158,16 @@ inline const QHash<QString, QString>& plDict()
         // ── Sales history ────────────────────────────────────────
         { "Search sales...", "Szukaj sprzedaży..." },
         { "Export CSV", "Eksportuj CSV" },
+        { "Simple view", "Widok prosty" },
 
         // ── Reports ──────────────────────────────────────────────
         { "Generate Report", "Generuj raport" },
         { "Export Report", "Eksportuj raport" },
+        { "Export PDF", "Eksportuj PDF" },
+        { "PDF Files", "Pliki PDF" },
+        { "Generate the report first.", "Najpierw wygeneruj raport." },
+        { "PDF report saved.", "Raport PDF zapisany." },
+        { "Could not save the PDF report.", "Nie udało się zapisać raportu PDF." },
         { "SALES REPORT", "RAPORT SPRZEDAŻY" },
         { "Generated: ", "Wygenerowano: " },
         { "Total Transactions: ", "Całkowita liczba transakcji: " },

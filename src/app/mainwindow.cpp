@@ -8,6 +8,7 @@
 #include "translations.h"
 #include "charts.h"
 #include "statistics.h"
+#include "pdf_export.h"
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -102,8 +103,8 @@ static int sellKeyForIndex(int index, const QList<int>& reserved)
     return -1;
 }
 
-// "Alt+1" / "Alt+Q" hint text for a grid item, or "" when the item has
-// no sell key (beyond the letter rows) or keybinds are disabled.
+// "[ALT+1]" / "[ALT+Q]" hint text for a grid item, or "" when the item
+// has no sell key (beyond the letter rows) or keybinds are disabled.
 static QString sellKeyHint(int index, const QList<int>& reserved, bool enabled)
 {
     if (!enabled) return QString();
@@ -112,7 +113,7 @@ static QString sellKeyHint(int index, const QList<int>& reserved, bool enabled)
     QString key;
     if (k >= Qt::Key_0 && k <= Qt::Key_9) key = QChar('0' + (k - Qt::Key_0));
     else key = QChar(k);
-    return QStringLiteral("Alt+") + key;
+    return QStringLiteral("[ALT+") + key + QStringLiteral("]");
 }
 
 // ── Localized list-row text (UI side) ───────────────────────────────
@@ -144,6 +145,22 @@ static QString saleListText(const Domain::Sale& s,
         + fmtMoney(s.totalAmount) + " | "
         + Tr::trS("By: ") + QString::fromStdString(s.soldBy) + " | "
         + date;
+}
+
+// Compact "simple view" row for the Sales History list: item, quantity,
+// total and date — no sale id / operator details.
+static QString saleListTextSimple(const Domain::Sale& s,
+                                  const std::unordered_map<std::string, std::string>& names)
+{
+    QString itemName = QString::fromStdString(
+        names.count(s.itemId) ? names.at(s.itemId) : s.itemId);
+    QString date = QString::fromStdString(Domain::toISOString(s.saleDate));
+    date.replace('T', ' ');
+    date.remove('Z');
+    return itemName
+        + " ×" + QString::number(s.quantitySold)
+        + "  " + fmtMoney(s.totalAmount)
+        + "  " + date;
 }
 
 MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
@@ -1552,7 +1569,6 @@ void MainWindow::refreshSellStats()
 
     auto snap = Stats::compute(sales, itemNames, userNames);
 
-    // "sold Krakersy for 12,00 zł" — one simple line per sale.
     QStringList soldLines;
     QString today = QDate::currentDate().toString("yyyy-MM-dd");
     for (const auto& s : sales) {
@@ -1562,32 +1578,14 @@ void MainWindow::refreshSellStats()
         soldLines << QString(Tr::trS("sold %1 for %2")).arg(name).arg(fmtMoney(s.totalAmount));
     }
 
-    QString topName = "-";
-    if (!snap.todayTopItem.id.isEmpty()) {
-        topName = snap.todayTopItem.name + " (x" + QString::number(snap.todayTopItem.qty) + ")";
-    }
-
     ui->lblStatSales_sell->setText(Tr::trS("Sales: ") + QString::number(snap.todayTx));
     ui->lblStatRevenue_sell->setText(Tr::trS("Revenue: ") + fmtMoney(snap.todayRevenue));
     ui->lblStatItems_sell->setText(Tr::trS("Items sold: ") + QString::number(snap.todayItems));
-    ui->lblStatTop_sell->setText(Tr::trS("Top item: ") + topName);
     if (ui->lblSoldLines_sell) {
         ui->lblSoldLines_sell->setText(soldLines.isEmpty()
             ? Tr::trS("No sales today.")
             : soldLines.join("\n"));
     }
-
-    // Trend vs yesterday (local calendar days).
-    QString trend = Tr::trS("Trend: -");
-    QString yesterday = QDate::currentDate().addDays(-1).toString("yyyy-MM-dd");
-    double yRevenue = snap.revByDay[yesterday];
-    if (yRevenue > 0.0) {
-        double pct = ((snap.todayRevenue - yRevenue) / yRevenue) * 100.0;
-        trend = Tr::trS("Trend: ") + QString("%1% ").arg(pct, 0, 'f', 1) + Tr::trS("vs yesterday");
-    } else if (snap.todayRevenue > 0.0) {
-        trend = Tr::trS("Trend: ") + Tr::trS("no sales yesterday");
-    }
-    ui->lblStatTrend_sell->setText(trend);
 }
 
 void MainWindow::on_chkSimpleView_sell_toggled(bool checked)
@@ -2206,20 +2204,30 @@ void MainWindow::on_actionSales_History_triggered()
     on_btnRefresh_sales_clicked();
 }
 
-void MainWindow::on_btnRefresh_sales_clicked()
+void MainWindow::populateSalesList(const std::vector<Domain::Sale>& sales)
 {
-    auto sales = m_db.getAllSales();
+    if (!ui->lstSearch_sales) return;
+
     auto items = m_db.getAllItems();
     std::unordered_map<std::string, std::string> names;
     for (const auto& it : items) names[it.id] = it.name;
+
+    bool simple = ui->chkSimpleView_sales && ui->chkSimpleView_sales->isChecked();
     ui->lstSearch_sales->clear();
-    double totalRevenue = 0.0;
     for (const auto& s : sales) {
-        QListWidgetItem* lwi = new QListWidgetItem(saleListText(s, names));
+        QString text = simple ? saleListTextSimple(s, names) : saleListText(s, names);
+        QListWidgetItem* lwi = new QListWidgetItem(text);
         lwi->setData(Qt::UserRole, QString::fromStdString(s.id));
         ui->lstSearch_sales->addItem(lwi);
-        totalRevenue += s.totalAmount;
     }
+}
+
+void MainWindow::on_btnRefresh_sales_clicked()
+{
+    auto sales = m_db.getAllSales();
+    populateSalesList(sales);
+    double totalRevenue = 0.0;
+    for (const auto& s : sales) totalRevenue += s.totalAmount;
     if (ui->lblSalesTotal) {
         ui->lblSalesTotal->setText(Tr::trS("Total Revenue: ") + fmtMoney(totalRevenue));
     }
@@ -2229,19 +2237,22 @@ void MainWindow::on_btnSearch_sales_clicked()
 {
     QString term = ui->txtSearch_sales->text().trimmed();
     auto sales = m_db.searchSales(term.toStdString(), "");
-    auto items = m_db.getAllItems();
-    std::unordered_map<std::string, std::string> names;
-    for (const auto& it : items) names[it.id] = it.name;
-    ui->lstSearch_sales->clear();
+    populateSalesList(sales);
     double totalRevenue = 0.0;
-    for (const auto& s : sales) {
-        QListWidgetItem* lwi = new QListWidgetItem(saleListText(s, names));
-        lwi->setData(Qt::UserRole, QString::fromStdString(s.id));
-        ui->lstSearch_sales->addItem(lwi);
-        totalRevenue += s.totalAmount;
-    }
+    for (const auto& s : sales) totalRevenue += s.totalAmount;
     if (ui->lblSalesTotal) {
         ui->lblSalesTotal->setText(Tr::trS("Search Total: ") + fmtMoney(totalRevenue));
+    }
+}
+
+void MainWindow::on_chkSimpleView_sales_toggled(bool)
+{
+    // Re-apply the simple/detailed format to whatever is currently shown,
+    // keeping an active search filter if one is entered.
+    if (ui->txtSearch_sales && !ui->txtSearch_sales->text().trimmed().isEmpty()) {
+        on_btnSearch_sales_clicked();
+    } else {
+        on_btnRefresh_sales_clicked();
     }
 }
 
@@ -2360,6 +2371,38 @@ void MainWindow::on_btnExportReport_clicked()
             }
         }
     }
+}
+
+// Export the generated report (text + charts) as a PDF. The actual
+// writing lives in pdf_export.h (QPdfWriter), so no extra Qt module is
+// needed in the static builds.
+void MainWindow::on_btnExportPdfReport_clicked()
+{
+    if (!ui->txtReport || ui->txtReport->toPlainText().isEmpty()) {
+        QMessageBox::information(this, Tr::trS("Export PDF"),
+                                 Tr::trS("Generate the report first."));
+        return;
+    }
+
+    QString fileName = QFileDialog::getSaveFileName(
+        this, Tr::trS("Export PDF"), "report.pdf", Tr::trS("PDF Files") + " (*.pdf)");
+    if (fileName.isEmpty()) return;
+    if (!fileName.endsWith(".pdf", Qt::CaseInsensitive)) fileName += ".pdf";
+
+    QString err;
+    if (exportReportToPdf(fileName, ui->txtReport->toPlainText(),
+                          ui->reportChartsContainer, &err)) {
+        QMessageBox::information(this, Tr::trS("Export PDF"), Tr::trS("PDF report saved."));
+    } else {
+        QMessageBox::warning(this, Tr::trS("Export PDF"),
+                             Tr::trS("Could not save the PDF report.") + " (" + err + ")");
+    }
+}
+
+void MainWindow::on_btnExitReport_clicked()
+{
+    goToPage(1); // dashboard
+    refreshDashboard();
 }
 
 // ═══════════════════════════════════════════════════════════════════
