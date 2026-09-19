@@ -85,6 +85,7 @@ inline const QHash<QString, QString>& plDict()
 
         // ── Dashboard ────────────────────────────────────────────
         { "SELL", "SPRZEDAJ" },
+        { "START SELLING", "ROZPOCZNIJ SPRZEDAŻ" },
         { "UNDO SALE", "COFNIJ SPRZEDAŻ" },
         { "Total Items", "Liczba przedmiotów" },
         { "Items Sold", "Sprzedano sztuk" },

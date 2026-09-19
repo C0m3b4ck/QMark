@@ -3,9 +3,11 @@
 // ─────────────────────────────────────────────────────────────────────
 // pdf_export.h — dependency-free report → PDF exporter.
 //
-// Writes the generated report as A4 PDF: the report text first (monospace,
-// pre-wrapped lines kept intact), then a snapshot of every chart widget in
-// `chartsContainer`, starting a new page whenever content no longer fits.
+// Writes the generated report as A4 PDF: the report text first (clean
+// sans-serif body, pre-wrapped lines kept intact), then a snapshot of
+// every chart widget marked with the "reportChart" property inside
+// `chartsContainer` (which may be a plain container or a QSplitter),
+// starting a new page whenever content no longer fits.
 // Uses only QtGui/QtWidgets (QPdfWriter), so no extra Qt module is needed
 // in the static Windows cross-build.
 // ─────────────────────────────────────────────────────────────────────
@@ -53,11 +55,14 @@ inline bool exportReportToPdf(const QString& fileName,
     const int maxX   = pageW - margin;
     const int maxY   = pageH - margin;
 
-    // ── Report text (monospace, lines kept intact) ────────────────
-    QFont mono(QStringLiteral("Courier New"), 10);
-    const QFontMetrics fm(mono);
-    const int lineH = fm.height() + 2;
-    painter.setFont(mono);
+    // ── Report text (sans-serif body, lines kept intact) ─────────
+    // A clean humanist sans instead of the old terminal-looking mono:
+    // QPdfWriter embeds TrueType glyphs (verified: /FontFile2), so any
+    // installed font family renders correctly in the static build too.
+    QFont font(QStringLiteral("Segoe UI"), 11);
+    const QFontMetrics fm(font);
+    const int lineH = fm.height() + 3;
+    painter.setFont(font);
 
     int y = top;
     const auto newPageIfNeeded = [&](int needed) {
@@ -84,12 +89,14 @@ inline bool exportReportToPdf(const QString& fileName,
 
     // ── Charts (snapshots of the report chart widgets) ────────────
     if (chartsContainer) {
-        QLayout* lay = chartsContainer->layout();
+        // The chart widgets are direct children of a vertical QSplitter;
+        // they are marked with the "reportChart" property so the splitter
+        // handles are skipped without depending on widget class names.
         const int availW = maxX - left;
-        for (int i = 0; lay && i < lay->count(); ++i) {
-            QLayoutItem* it = lay->itemAt(i);
-            QWidget* w = it ? it->widget() : nullptr;
-            if (!w) continue;
+        const QList<QWidget*> kids =
+            chartsContainer->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+        for (QWidget* w : kids) {
+            if (!w || !w->property("reportChart").toBool()) continue;
             QImage img = w->grab().toImage();
             if (img.isNull()) continue;
             QImage scaled = (availW < img.width())

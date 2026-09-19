@@ -13,6 +13,8 @@
 #include "dataaccess.h"
 #include "worklog.h"
 
+class QTimer;
+
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class MainWindow;
@@ -31,6 +33,7 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 public:
     bool isLoggedIn() const;
@@ -210,6 +213,7 @@ private:
 
     // ── Dashboard ────────────────────────────────────────────────
     void refreshDashboard();
+    void updateDashboardClock();
 
     // ── POS Grid helpers ──────────────────────────────────────────
     void rebuildItemGrid(const std::vector<Domain::Item>& items);
@@ -230,6 +234,9 @@ private:
     std::vector<Domain::Item> m_sellItems;   // items currently shown in the grid
     QVector<QWidget*> m_sellCards;           // card widgets in grid order
     int m_sellHighlightIndex = -1;           // currently highlighted card (-1 = none)
+
+    // Dashboard clock (updates every second)
+    QTimer *m_clockTimer = nullptr;
 };
 
 #endif // MAINWINDOW_H

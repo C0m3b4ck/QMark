@@ -12,9 +12,13 @@
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QInputDialog>
+#include <QApplication>
 #include <QCloseEvent>
 #include <QResizeEvent>
 #include <QKeyEvent>
+#include <QEvent>
+#include <QTimer>
+#include <QSplitter>
 #include <QScrollBar>
 #include <QGridLayout>
 #include <QScrollArea>
@@ -217,6 +221,29 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     // Connect dashboard buttons
     connect(ui->btnDashboardSell, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
     connect(ui->btnUndoSale, &QPushButton::clicked, this, &MainWindow::on_btnUndoSale_clicked);
+    if (ui->btnStartSelling) {
+        connect(ui->btnStartSelling, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
+    }
+
+    // Dashboard clock: live time + date, refreshed every second.
+    m_clockTimer = new QTimer(this);
+    connect(m_clockTimer, &QTimer::timeout, this, &MainWindow::updateDashboardClock);
+    m_clockTimer->start(1000);
+    updateDashboardClock();
+
+    // Report view: two resizable panes (report text | charts). The charts
+    // pane itself is a vertical splitter so the pie and bar charts can be
+    // resized individually.
+    if (ui->splitReportBody) {
+        ui->splitReportBody->setStretchFactor(0, 0);
+        ui->splitReportBody->setStretchFactor(1, 1);
+        ui->splitReportBody->setSizes({470, 640});
+    }
+
+    // Application-wide Alt+key interception: the sell-page keybinds must
+    // keep working even while the search box (or any other sell-page
+    // widget) holds focus.
+    qApp->installEventFilter(this);
 
     // Sell-page search as you type (live card filtering)
     if (ui->txtSearch_sell_page) {
@@ -1148,6 +1175,16 @@ void MainWindow::refreshDashboard()
     }
 }
 
+// Live dashboard clock (updates every second via m_clockTimer).
+void MainWindow::updateDashboardClock()
+{
+    QDateTime now = QDateTime::currentDateTime();
+    if (ui->lblClockTime)
+        ui->lblClockTime->setText(now.toString("HH:mm:ss"));
+    if (ui->lblClockDate)
+        ui->lblClockDate->setText(now.toString("dddd, d MMMM yyyy"));
+}
+
 void MainWindow::on_btnDashboardSell_clicked()
 {
     on_actionSell_Item_triggered();
@@ -1976,9 +2013,45 @@ static int sellKeyIndex(int key, const QList<int>& reserved)
     return -1;
 }
 
+// Application-wide key interceptor. Because the sell-page Alt+key combos
+// must keep working even when the search box (or any other widget on the
+// sell page) has focus — key events to a focused child widget never reach
+// MainWindow::keyPressEvent — the Alt+key presses are consumed here first.
+// Ctrl is excluded so AltGr-typed characters on non-US layouts still land
+// in text fields, and letters reserved by the menu bar are left alone
+// (they return -1 from sellKeyIndex and fall through to the menus).
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::KeyPress
+        && watched != this
+        && m_keybindsEnabled
+        && m_isLoggedIn
+        && !QApplication::activeModalWidget()   // no dialogs on top
+        && ui->stackedWidget
+        && ui->stackedWidget->currentIndex() == 6) {
+        auto* k = static_cast<QKeyEvent*>(event);
+        const int key = k->key();
+        const Qt::KeyboardModifiers mods = k->modifiers();
+        const bool altGr = (mods & Qt::ControlModifier) != 0;
+        if (key != Qt::Key_Alt
+            && (mods & Qt::AltModifier)
+            && !altGr
+            && !(mods & Qt::KeypadModifier)) {
+            QList<int> reserved = menuAcceleratorKeys(this);
+            int idx = sellKeyIndex(key, reserved);
+            if (idx >= 0 && idx < m_sellCards.size()) {
+                sellProductAtIndex(idx);
+                return true;   // consumed: never reaches the focused widget
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 // Alt+digits/letters sell directly; arrows move the highlight; Enter
 // sells the highlighted item. Only active on the sell page when keybinds
-// are on and the search box does not have focus.
+// are on. The Alt+key combos are handled from the application-level event
+// filter (below) so they also work while the search box has focus.
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     bool onSellPage = ui->stackedWidget
@@ -1989,8 +2062,9 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     if (m_keybindsEnabled && onSellPage && m_isLoggedIn) {
         int key = event->key();
         bool alt = (event->modifiers() & Qt::AltModifier) != 0;
+        bool altGr = (event->modifiers() & Qt::ControlModifier) != 0;
 
-        if (alt && key != Qt::Key_Alt) {
+        if (alt && !altGr && key != Qt::Key_Alt) {
             // Which Alt+letter combos are taken by the menu bar? Those
             // letters are dropped from the sell mapping ("functional/used
             // ones"), computed from the CURRENT (possibly translated)
@@ -2314,13 +2388,17 @@ void MainWindow::on_btnGenerateReport_clicked()
     }
 
     // ── Statistics charts ───────────────────────────────────────
-    if (ui->reportChartsContainer) {
+    // The charts live in a vertical splitter so each chart can be resized
+    // individually; the marker property lets the PDF exporter (and only
+    // it) pick the chart widgets out of the splitter.
+    if (ui->splitReportCharts) {
+        QSplitter* split = ui->splitReportCharts;
+
         // Clear any previously generated charts.
-        QLayout* lay = ui->reportChartsContainer->layout();
-        while (lay && lay->count() > 0) {
-            QLayoutItem* it = lay->takeAt(0);
-            if (it->widget()) it->widget()->deleteLater();
-            delete it;
+        while (split->count() > 0) {
+            QWidget* old = split->widget(0);
+            if (old) old->setParent(nullptr);   // detaches it from the splitter
+            if (old) old->deleteLater();
         }
 
         // Pie: which items were sold the most (top 8 + "Other").
@@ -2340,7 +2418,8 @@ void MainWindow::on_btnGenerateReport_clicked()
             if (other > 0.0) pieData << QPair<QString, double>(Tr::trS("Other"), other);
         }
         pie->setData(pieData);
-        lay->addWidget(pie);
+        pie->setProperty("reportChart", true);
+        split->addWidget(pie);
 
         // Bar: shop activity by hour of day (local time).
         auto* bar = new BarChartWidget;
@@ -2353,7 +2432,11 @@ void MainWindow::on_btnGenerateReport_clicked()
             else            barLabels << QString();
         }
         bar->setData(barVals, barLabels, 4);
-        lay->addWidget(bar);
+        bar->setProperty("reportChart", true);
+        split->addWidget(bar);
+
+        // Sensible starting split: ~40% pie / 60% bar.
+        split->setSizes({320, 420});
     }
 }
 
@@ -2375,7 +2458,8 @@ void MainWindow::on_btnExportReport_clicked()
 
 // Export the generated report (text + charts) as a PDF. The actual
 // writing lives in pdf_export.h (QPdfWriter), so no extra Qt module is
-// needed in the static builds.
+// needed in the static builds. The suggested file name carries a
+// timestamp so consecutive exports never silently overwrite each other.
 void MainWindow::on_btnExportPdfReport_clicked()
 {
     if (!ui->txtReport || ui->txtReport->toPlainText().isEmpty()) {
@@ -2384,14 +2468,16 @@ void MainWindow::on_btnExportPdfReport_clicked()
         return;
     }
 
+    QString stamp = QDateTime::currentDateTime().toString("yyyy-MM-dd_hh-mm-ss");
+    QString defaultName = QString("QMark_Report_%1.pdf").arg(stamp);
     QString fileName = QFileDialog::getSaveFileName(
-        this, Tr::trS("Export PDF"), "report.pdf", Tr::trS("PDF Files") + " (*.pdf)");
+        this, Tr::trS("Export PDF"), defaultName, Tr::trS("PDF Files") + " (*.pdf)");
     if (fileName.isEmpty()) return;
     if (!fileName.endsWith(".pdf", Qt::CaseInsensitive)) fileName += ".pdf";
 
     QString err;
     if (exportReportToPdf(fileName, ui->txtReport->toPlainText(),
-                          ui->reportChartsContainer, &err)) {
+                          ui->splitReportCharts, &err)) {
         QMessageBox::information(this, Tr::trS("Export PDF"), Tr::trS("PDF report saved."));
     } else {
         QMessageBox::warning(this, Tr::trS("Export PDF"),
