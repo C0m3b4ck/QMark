@@ -10,7 +10,7 @@
 QMark runs on **Windows** (2000 through 11), **Linux**, and tablets.  
 It provides a touch-friendly interface for clerks to browse items, sell them, and track inventory — all from a responsive window that fits any screen size.
 
-All builds are **completely statically linked** — no external DLLs or shared libraries are required. Just copy the executable and go.
+Release binaries are **completely statically linked** — no external DLLs or shared libraries are required. Just copy the executable and go. (Native MSYS2 dev builds link dynamically — see [BUILD.md](BUILD.md).)
 
 ---
 
@@ -85,7 +85,7 @@ See **[BUILD.md](BUILD.md)** for complete build instructions for all supported p
 - **Windows x64** — cross-compile from Linux or native MSYS2 build
 - **Windows x86** — cross-compile from Linux or native MSYS2 build
 
-All builds are completely statically linked.
+Release binaries are completely statically linked; MSYS2 native dev builds link dynamically (full details in BUILD.md).
 
 ---
 

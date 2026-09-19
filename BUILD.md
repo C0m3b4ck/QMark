@@ -1,6 +1,6 @@
 # Build Instructions for QMark
 
-> All builds are **completely statically linked** — no external DLLs or shared libraries required.
+> Release binaries (all build-script targets) are **completely statically linked** — no external DLLs or shared libraries required. The native **MSYS2** route links dynamically against MinGW-w64 packages (see [MSYS2](#prerequisites-msys2--native-windows-build)).
 
 ---
 
@@ -79,7 +79,7 @@ QT_DIR=/my/qt6 SQLITE3_DIR=/my/sqlite3 SODIUM_DIR=/my/sodium ./build-win-x64.sh
 | **Windows x64** | x86_64 | MinGW-w64 (cross) | Linux x64 |
 | **Windows x86** | i686 | MinGW-w64 (cross) | Linux x64 |
 
-Windows targets also support native builds via MSYS2.
+Windows targets also support native builds via MSYS2 (dynamic linking — see [MSYS2](#prerequisites-msys2--native-windows-build) and [Manual Build (MSYS2)](#msys2-native-windows)).
 
 ---
 
@@ -120,13 +120,22 @@ sudo apt install libsodium-dev
 
 ## Prerequisites (MSYS2 — Native Windows Build)
 
-Download and install [MSYS2](https://www.msys2.org/), then from the **MSYS2 MinGW 64-bit** terminal:
+Download and install [MSYS2](https://www.msys2.org/), then from the **MSYS2 MinGW 64-bit** terminal (not the plain MSYS2 shell):
 
 ```bash
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-make
-pacman -S mingw-w64-x86_64-qt6-base mingw-w64-x86_64-qt6-svg
-pacman -S mingw-w64-x86_64-sqlite3 mingw-w64-x86_64-libsodium
+pacman -S mingw-w64-x86_64-gcc          # MinGW-w64 gcc/g++ toolchain
+pacman -S mingw-w64-x86_64-make         # provides mingw32-make.exe
+pacman -S mingw-w64-x86_64-qt6-base     # Qt6 libraries + qmake6, moc, uic, rcc, windeployqt6
+pacman -S mingw-w64-x86_64-sqlite3
+pacman -S mingw-w64-x86_64-libsodium
 ```
+
+**Notes:**
+
+- All Qt build tools ship inside `mingw-w64-x86_64-qt6-base`: `qmake6`, `moc`, `uic`, `rcc` and `windeployqt6` are installed under `/mingw64/`. No separate tools package is required.
+- No `-I`/`-L` flags and no `SQLITE_LIBDIR`/`SODIUM_LIBDIR` environment variables are needed — the packages install headers into `/mingw64/include` and libraries into `/mingw64/lib`, both of which are on the default MinGW-w64 compiler search path. This also means `SQLiteCpp`, `sqlite3`, and `sodium` are all satisfied from the packages.
+- `mingw-w64-x86_64-cmake` and `mingw-w64-x86_64-qt6-svg` are **not** needed: QMark builds with qmake, and the app has no SVG resources (SVG plugins are only imported in fully static builds).
+- **Dynamic, not static**: MSYS2's official Qt6/SQLite3/libsodium packages are shared libraries (DLLs), so a native MSYS2 build links dynamically and needs those DLLs at runtime — see [Manual Build (MSYS2)](#msys2-native-windows). For a single static `.exe`, use the Linux cross-compile route (`./build-win-x64.sh`).
 
 ---
 
@@ -266,7 +275,7 @@ For Windows x86, replace `x86_64` with `i686` throughout.
 
 #### Native MSYS2 Build (Windows Only)
 
-From MSYS2 MinGW terminal, Qt is available as a pre-built package. For static builds, install the `-static` variants if available, or build Qt from source within MSYS2.
+MSYS2's official Qt6 packages are **shared libraries** (DLLs) — there is no pre-built static Qt6 in the MSYS2 repos, so a native MSYS2 build is dynamic by default (see [Manual Build (MSYS2)](#msys2-native-windows)). For a static MSYS2 build you must compile Qt from source inside MSYS2 with `-static`, using the same configure options as above minus `-xplatform`, `-device-option`, and `-qt-host-path`, then build with `qmake6 QMark.pro STATIC_BUILD=1`. The recommended route for static Windows binaries remains the Linux cross-compile (`./build-win-x64.sh`).
 
 ---
 
@@ -300,11 +309,18 @@ make -j$(nproc)
 
 ### MSYS2 (Native Windows)
 
+From the **MSYS2 MinGW 64-bit** terminal:
+
 ```bash
 cd src
-qmake QMark.pro
-make -j$(nproc)
+qmake6 QMark.pro
+mingw32-make -j$(nproc)     # 'mingw32-make' is provided by mingw-w64-x86_64-make
 ```
+
+- Prefer a bare `make` instead? Install MSYS2's own make package first: `pacman -S make`, then use `make -j$(nproc)`.
+- The `SUBDIRS` project builds the vendored SQLiteCpp static library first, then links the app against it. The result is `src/app/QMark.exe`.
+- **Running**: launch `QMark.exe` from the MSYS2 MinGW 64-bit terminal so `/mingw64/bin` (which holds the Qt6 and MinGW-w64 runtime DLLs) is on `PATH`.
+- **Distributing**: this build is dynamic. Deploy with `/mingw64/bin/windeployqt6.exe QMark.exe` and copy the MinGW-w64 runtime DLLs (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`) next to the exe. For a single-file static build, use `./build-win-x64.sh` on Linux instead.
 
 ---
 
@@ -367,6 +383,8 @@ After building, the only file needed is `QMark.exe`. No DLLs are required.
 zip QMark-Windows-x64-$(date +%Y%m%d).zip QMark-x64.exe
 ```
 
+> Native MSYS2 builds are dynamic: deploy with `/mingw64/bin/windeployqt6.exe QMark.exe` and copy the MinGW-w64 runtime DLLs (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`) alongside the exe. See [Manual Build (MSYS2)](#msys2-native-windows).
+
 ### Linux
 
 The static binary can be distributed as a single file:
@@ -412,3 +430,21 @@ MinGW cross-compiler sysroot not configured. Ensure `mingw-w64` is installed.
 ### Qt configure: "Qt6HostInfo not found"
 
 Build Qt host tools (Step 2) before cross-compiling for target (Step 4).
+
+### MSYS2: "make: command not found" / "qmake: command not found"
+
+Run from the **MSYS2 MinGW 64-bit** terminal — its `PATH` starts with `/mingw64/bin`. The Qt6 qmake is `qmake6`; the MinGW make is `mingw32-make` (or `pacman -S make` for a bare `make`).
+
+### MSYS2: "warning: /usr/include/sodium: No such file or directory"
+
+Harmless. The `app.pro` default include path targets Linux; on MSYS2, `sodium.h` is found automatically via `/mingw64/include`. To silence the warning, export the paths before running qmake:
+
+```bash
+export SODIUM_INCLUDE=/mingw64/include
+export SODIUM_LIBDIR=/mingw64/lib
+qmake6 QMark.pro
+```
+
+### MSYS2 build runs, but Windows reports "Qt6Widgets.dll not found" when double-clicking the exe
+
+The MSYS2 build is dynamic. Run it from the MinGW 64-bit terminal, or deploy with `windeployqt6` plus the MinGW runtime DLLs (see [Manual Build (MSYS2)](#msys2-native-windows)).
