@@ -137,6 +137,7 @@ private slots:
     void on_btnUndoAll_undoremoved_clicked();
     void on_btnUndoSelected_undoremoved_clicked();
     void on_lstSearch_undoremoved_itemClicked(QListWidgetItem *item);
+    void refreshRemovedItemsList();
 
     // ── Reports ───────────────────────────────────────────────────
     void on_actionMake_Report_triggered();

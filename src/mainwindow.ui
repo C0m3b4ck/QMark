@@ -257,18 +257,18 @@
             </spacer>
            </item>
            <item>
-            <widget class="QPushButton" name="btnSellNav">
+            <widget class="QPushButton" name="btnExitNav">
              <property name="text">
-              <string>SELL</string>
+              <string>Exit</string>
              </property>
              <property name="minimumSize">
               <size>
-               <width>120</width>
+               <width>110</width>
                <height>40</height>
               </size>
              </property>
              <property name="styleSheet">
-              <string notr="true">QPushButton { background-color: #2e7d32; color: white; font-size: 14px; font-weight: bold; border: none; border-radius: 6px; padding: 5px 15px; } QPushButton:hover { background-color: #1b5e20; }</string>
+              <string notr="true">QPushButton { background-color: #c62828; color: white; font-size: 14px; font-weight: bold; border: none; border-radius: 6px; padding: 5px 15px; } QPushButton:hover { background-color: #b71c1c; }</string>
              </property>
              <property name="cursor">
               <enum>Qt::PointingHandCursor</enum>
@@ -512,7 +512,7 @@
               <item>
                <widget class="QPushButton" name="btnDashboardSell">
                 <property name="text">
-                 <string>SELL</string>
+                 <string>START SELLING</string>
                 </property>
                 <property name="minimumSize">
                  <size>
@@ -558,32 +558,6 @@
                 <width>0</width>
                 <height>150</height>
                </size>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QPushButton" name="btnStartSelling">
-              <property name="text">
-               <string>START SELLING</string>
-              </property>
-              <property name="minimumSize">
-               <size>
-                <width>0</width>
-                <height>90</height>
-               </size>
-              </property>
-              <property name="font">
-               <font>
-                <pointsize>20</pointsize>
-                <weight>75</weight>
-                <bold>true</bold>
-               </font>
-              </property>
-              <property name="styleSheet">
-               <string notr="true">QPushButton { background-color: #2e7d32; color: white; border: none; border-radius: 12px; font-size: 20px; font-weight: bold; } QPushButton:hover { background-color: #1b5e20; }</string>
-              </property>
-              <property name="cursor">
-               <enum>Qt::PointingHandCursor</enum>
               </property>
              </widget>
             </item>
@@ -1461,7 +1435,7 @@
         <item>
          <widget class="QCheckBox" name="chkKeybinds_sell">
           <property name="text">
-           <string>Enable sell keybinds (Alt+1-9, Alt+0, Alt+letters, arrows, Enter)</string>
+           <string>Enable sell keybinds (Alt+1-9, Alt+0, Alt+letters, arrows, Enter; Alt+X cancels the last sale)</string>
           </property>
           <property name="font">
            <font>

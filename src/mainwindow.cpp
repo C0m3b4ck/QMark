@@ -101,6 +101,7 @@ static int sellKeyForIndex(int index, const QList<int>& reserved)
     int used = 0;
     for (int i = 0; i < n; ++i) {
         if (reserved.contains(letters[i])) continue;
+        if (letters[i] == Qt::Key_X) continue; // X = cancel sale, never a sell key
         if (used == index - 10) return letters[i];
         ++used;
     }
@@ -216,13 +217,10 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     if (ui->chkKeybinds_sell) ui->chkKeybinds_sell->setChecked(m_keybindsEnabled);
     if (ui->chkKeybinds_pref) ui->chkKeybinds_pref->setChecked(m_keybindsEnabled);
 
-    // Connect Sell button in top bar
-    connect(ui->btnSellNav, &QPushButton::clicked, this, &MainWindow::on_actionSell_Item_triggered);
     // Connect dashboard buttons
     connect(ui->btnDashboardSell, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
-    if (ui->btnStartSelling) {
-        connect(ui->btnStartSelling, &QPushButton::clicked, this, &MainWindow::on_btnDashboardSell_clicked);
-    }
+    // Exit button in the top bar.
+    connect(ui->btnExitNav, &QPushButton::clicked, this, &MainWindow::on_actionClose_triggered);
 
     // Dashboard clock: live time + date, refreshed every second.
     m_clockTimer = new QTimer(this);
@@ -492,6 +490,8 @@ void MainWindow::goToPage(int index)
         if (ui->txtUsername_login) ui->txtUsername_login->clear();
         if (ui->txtPassword_login) ui->txtPassword_login->clear();
         if (ui->chkHide_login)     ui->chkHide_login->setChecked(false);
+    } else if (index == 5 && m_isLoggedIn) { // undo removed page: auto-populate
+        refreshRemovedItemsList();
     } else if (index == 16) { // register page
         if (ui->txtUsername_register)  ui->txtUsername_register->clear();
         if (ui->txtPassword1_register) ui->txtPassword1_register->clear();
@@ -535,6 +535,11 @@ void MainWindow::applyLanguageToUi()
     if (m_firstRunPage) Tr::applyLanguage(m_firstRunPage);
     updatePricePlaceholders();
     syncLanguageUi();
+    // Dashboard calendar follows the UI language, too.
+    if (ui->calendarDashboard) {
+        ui->calendarDashboard->setLocale((Tr::language() == "pl")
+            ? QLocale(QLocale::Polish) : QLocale(QLocale::English));
+    }
     // Keep the (optional) POS simple-view statistics in the new language.
     if (ui->frameStats_sell && ui->frameStats_sell->isVisible()) refreshSellStats();
 }
@@ -1054,6 +1059,7 @@ void MainWindow::on_btnUndoRemove_item_clicked()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
     goToPage(5); // Undo removed page
+    refreshRemovedItemsList(); // never show an empty page
 }
 
 void MainWindow::on_btnUndoLast_item_clicked()
@@ -1063,7 +1069,7 @@ void MainWindow::on_btnUndoLast_item_clicked()
     if (!removed.empty()) {
         QString id = QString::fromStdString(removed.front().id);
         if (m_db.restoreItem(id.toStdString())) {
-            QMessageBox::information(this, "Undo Remove", "Item restored.");
+            QMessageBox::information(this, Tr::trS("Undo Remove"), Tr::trS("Item restored."));
         }
     }
 }
@@ -1072,18 +1078,26 @@ void MainWindow::on_btnUndoLast_item_clicked()
 // Undo — Removed Items
 // ═══════════════════════════════════════════════════════════════════
 
-void MainWindow::on_actionUndo_Removed_Items_triggered()
+// (Re)populate the Undo Removed Items list. Called from both the menu
+// action and the Remove-Item page button, and automatically whenever the
+// user lands on the page (see goToPage) so it is never left empty.
+void MainWindow::refreshRemovedItemsList()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
-    goToPage(5);
-
-    auto removed = m_db.getRemovedItems();
+    if (!ui->lstSearch_undoremoved) return;
     ui->lstSearch_undoremoved->clear();
+    auto removed = m_db.getRemovedItems();
     for (const auto& item : removed) {
         QListWidgetItem* lwi = new QListWidgetItem(itemListText(item));
         lwi->setData(Qt::UserRole, QString::fromStdString(item.id));
         ui->lstSearch_undoremoved->addItem(lwi);
     }
+}
+
+void MainWindow::on_actionUndo_Removed_Items_triggered()
+{
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    goToPage(5);
+    refreshRemovedItemsList();
 }
 
 void MainWindow::on_lstSearch_undoremoved_itemClicked(QListWidgetItem *item)
@@ -1102,8 +1116,8 @@ void MainWindow::on_btnUndoSelected_undoremoved_clicked()
     if (selected) {
         QString id = selected->data(Qt::UserRole).toString();
         if (m_db.restoreItem(id.toStdString())) {
-            QMessageBox::information(this, "Undo", "Item restored.");
-            on_actionUndo_Removed_Items_triggered(); // refresh
+            QMessageBox::information(this, Tr::trS("Undo"), Tr::trS("Item restored."));
+            refreshRemovedItemsList();
         }
     }
 }
@@ -1116,8 +1130,9 @@ void MainWindow::on_btnUndoAll_undoremoved_clicked()
     for (const auto& item : removed) {
         if (m_db.restoreItem(item.id)) count++;
     }
-    QMessageBox::information(this, "Undo All", QString("%1 item(s) restored.").arg(count));
-    on_actionUndo_Removed_Items_triggered();
+    QMessageBox::information(this, Tr::trS("Undo All"),
+        Tr::trS("%1 item(s) restored.").arg(count));
+    refreshRemovedItemsList();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1175,13 +1190,18 @@ void MainWindow::refreshDashboard()
 }
 
 // Live dashboard clock (updates every second via m_clockTimer).
+// The date respects the selected UI language: Polish displays Polish
+// weekday/month names, English the English ones.
 void MainWindow::updateDashboardClock()
 {
     QDateTime now = QDateTime::currentDateTime();
     if (ui->lblClockTime)
         ui->lblClockTime->setText(now.toString("HH:mm:ss"));
-    if (ui->lblClockDate)
-        ui->lblClockDate->setText(now.toString("dddd, d MMMM yyyy"));
+    if (ui->lblClockDate) {
+        QLocale loc = (Tr::language() == "pl") ? QLocale(QLocale::Polish)
+                                                : QLocale(QLocale::English);
+        ui->lblClockDate->setText(loc.toString(now.date(), "dddd, d MMMM yyyy"));
+    }
 }
 
 void MainWindow::on_btnDashboardSell_clicked()
@@ -2005,6 +2025,7 @@ static int sellKeyIndex(int key, const QList<int>& reserved)
     if (key >= Qt::Key_1 && key <= Qt::Key_9) return key - Qt::Key_1;
     if (key == Qt::Key_0) return 9;
     if (reserved.contains(key)) return -1;
+    if (key == Qt::Key_X) return -1; // Alt+X cancels the last sale, never sells
 
     static const int letters[] = {
         Qt::Key_Q, Qt::Key_W, Qt::Key_E, Qt::Key_R, Qt::Key_T,
@@ -2018,6 +2039,7 @@ static int sellKeyIndex(int key, const QList<int>& reserved)
     int used = 0;                      // non-reserved letters seen so far
     for (int i = 0; i < n; ++i) {
         if (letters[i] == key) return 10 + used;
+        if (letters[i] == Qt::Key_X) continue; // reserved for cancel-sale
         if (!reserved.contains(letters[i])) ++used;
     }
     return -1;
@@ -2048,6 +2070,12 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
             && !altGr
             && !(mods & Qt::KeypadModifier)) {
             QList<int> reserved = menuAcceleratorKeys(this);
+            if (key == Qt::Key_X) {
+                // Alt+X = cancel the last sale. X is never a sell key
+                // (see sellKeyIndex), so no product can be sold via Alt+X.
+                on_btnUndoSale_sell_clicked();
+                return true;   // consumed: never reaches the focused widget
+            }
             int idx = sellKeyIndex(key, reserved);
             if (idx >= 0 && idx < m_sellCards.size()) {
                 sellProductAtIndex(idx);
@@ -2081,6 +2109,13 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             // top-level menu titles.
             QList<int> reserved = menuAcceleratorKeys(this);
 
+            if (key == Qt::Key_X) {
+                // Alt+X = cancel the last sale. X is never a sell key
+                // (see sellKeyIndex), so no product can be sold via Alt+X.
+                on_btnUndoSale_sell_clicked();
+                event->accept();
+                return;
+            }
             int idx = sellKeyIndex(key, reserved);
             if (idx >= 0 && idx < m_sellCards.size()) {
                 sellProductAtIndex(idx);
@@ -2845,27 +2880,29 @@ void MainWindow::on_actionWorklogStats_triggered()
 
 void MainWindow::on_btnRefreshWorklog_clicked()
 {
-    if (ui->txtWorklog) {
-        QString stats;
-        stats += "═══════════════════════════════════════\n";
-        stats += "       WORKLOG SESSION STATISTICS\n";
-        stats += "═══════════════════════════════════════\n";
-        stats += "Session Start: " + m_worklog.getSessionStart().toString("yyyy-MM-dd hh:mm:ss") + "\n\n";
-        stats += "Items Added:      " + QString::number(m_worklog.getItemAddCount()) + "\n";
-        stats += "Items Edited:     " + QString::number(m_worklog.getItemEditCount()) + "\n";
-        stats += "Items Removed:    " + QString::number(m_worklog.getItemRemoveCount()) + "\n";
-        stats += "Sales Recorded:   " + QString::number(m_worklog.getSaleCount()) + "\n";
-        stats += "Categories Added: " + QString::number(m_worklog.getCategoryAddCount()) + "\n";
-        stats += "Categories Edited: " + QString::number(m_worklog.getCategoryEditCount()) + "\n";
-        stats += "Categories Removed:" + QString::number(m_worklog.getCategoryRemoveCount()) + "\n";
-        stats += "Shelves Added:    " + QString::number(m_worklog.getShelfAddCount()) + "\n";
-        stats += "Shelves Edited:   " + QString::number(m_worklog.getShelfEditCount()) + "\n";
-        stats += "Shelves Removed:  " + QString::number(m_worklog.getShelfRemoveCount()) + "\n";
-        stats += "Users Added:      " + QString::number(m_worklog.getUserAddCount()) + "\n";
-        stats += "Users Edited:     " + QString::number(m_worklog.getUserEditCount()) + "\n";
-        stats += "Users Removed:    " + QString::number(m_worklog.getUserRemoveCount()) + "\n";
-        ui->txtWorklog->setText(stats);
-    }
+    if (!ui->txtWorklog) return;
+    QString username = m_currentUser.has_value()
+        ? QString::fromStdString(m_currentUser->username) : QString();
+    QString stats;
+    stats += "═══════════════════════════════════════\n";
+    stats += "       " + Tr::trS("WORKLOG SESSION STATISTICS") + "\n";
+    stats += "═══════════════════════════════════════\n";
+    stats += Tr::trS("User: ") + username + "\n";
+    stats += Tr::trS("Session Start: ") + m_worklog.getSessionStart().toString("yyyy-MM-dd hh:mm:ss") + "\n\n";
+    stats += Tr::trS("Items Added: ") + QString::number(m_worklog.getItemAddCount()) + "\n";
+    stats += Tr::trS("Items Edited: ") + QString::number(m_worklog.getItemEditCount()) + "\n";
+    stats += Tr::trS("Items Removed: ") + QString::number(m_worklog.getItemRemoveCount()) + "\n";
+    stats += Tr::trS("Sales Recorded: ") + QString::number(m_worklog.getSaleCount()) + "\n";
+    stats += Tr::trS("Categories Added: ") + QString::number(m_worklog.getCategoryAddCount()) + "\n";
+    stats += Tr::trS("Categories Edited: ") + QString::number(m_worklog.getCategoryEditCount()) + "\n";
+    stats += Tr::trS("Categories Removed: ") + QString::number(m_worklog.getCategoryRemoveCount()) + "\n";
+    stats += Tr::trS("Shelves Added: ") + QString::number(m_worklog.getShelfAddCount()) + "\n";
+    stats += Tr::trS("Shelves Edited: ") + QString::number(m_worklog.getShelfEditCount()) + "\n";
+    stats += Tr::trS("Shelves Removed: ") + QString::number(m_worklog.getShelfRemoveCount()) + "\n";
+    stats += Tr::trS("Users Added: ") + QString::number(m_worklog.getUserAddCount()) + "\n";
+    stats += Tr::trS("Users Edited: ") + QString::number(m_worklog.getUserEditCount()) + "\n";
+    stats += Tr::trS("Users Removed: ") + QString::number(m_worklog.getUserRemoveCount()) + "\n";
+    ui->txtWorklog->setText(stats);
 }
 
 void MainWindow::on_btnExportWorklog_clicked()
@@ -2879,7 +2916,7 @@ void MainWindow::on_btnExportWorklog_clicked()
     QTextStream out(&file);
     out << ui->txtWorklog->toPlainText();
     file.close();
-    QMessageBox::information(this, "Export", "Worklog exported.");
+    QMessageBox::information(this, Tr::trS("Export"), Tr::trS("Worklog exported."));
 }
 
 // ═══════════════════════════════════════════════════════════════════
