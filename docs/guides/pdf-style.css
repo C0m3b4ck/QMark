@@ -1,0 +1,168 @@
+/* QMark guide PDF stylesheet — used by docs/guides/build-pdfs.sh
+   A4 pages, cover page, table of contents, one chapter per page. */
+
+@page {
+  size: A4;
+  margin: 20mm 17mm 22mm 17mm;
+}
+
+html { font-size: 10.5pt; }
+
+body {
+  font-family: "DejaVu Serif", Georgia, serif;
+  color: #1c2733;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ── Cover page ─────────────────────────────────────────────── */
+header#title-block-header {
+  page-break-after: always;
+  text-align: center;
+  padding-top: 88mm;
+}
+h1.title {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 30pt;
+  font-weight: bold;
+  color: #0078d4;
+  margin: 0 0 0.6em 0;
+  line-height: 1.2;
+  border: none;
+}
+p.subtitle {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 11pt;
+  color: #55606b;
+  margin: 0 auto;
+  max-width: 130mm;
+  line-height: 1.5;
+}
+
+/* ── Table of contents page ─────────────────────────────────── */
+nav#TOC {
+  page-break-before: always;
+  page-break-after: always;
+}
+nav#TOC::before {
+  content: "Contents";
+  display: block;
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 18pt;
+  font-weight: bold;
+  color: #0078d4;
+  margin-bottom: 0.8em;
+  border-bottom: 2px solid #0078d4;
+  padding-bottom: 0.2em;
+}
+nav#TOC > ul { list-style: none; margin: 0; padding: 0; }
+nav#TOC ul ul { list-style: none; margin: 0.1em 0 0.5em 0; padding-left: 1.4em; }
+nav#TOC li { margin: 0.35em 0; }
+nav#TOC a {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 10pt;
+  color: #1c2733;
+  text-decoration: none;
+}
+nav#TOC li > a { font-weight: bold; }
+
+/* ── Chapters: each starts on a new page ────────────────────── */
+section.level2 { break-before: page; }
+section.level2:first-of-type { break-before: auto; }
+
+h2 {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  color: #0b5fa5;
+  font-size: 16pt;
+  border-bottom: 2.5px solid #0078d4;
+  padding-bottom: 0.15em;
+  margin: 0.1em 0 0.7em 0;
+  break-after: avoid;
+}
+h3 {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  color: #0b5fa5;
+  font-size: 12.5pt;
+  margin: 1.1em 0 0.4em 0;
+  break-after: avoid;
+}
+h4 {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  color: #1c2733;
+  font-size: 11pt;
+  margin: 1em 0 0.3em 0;
+  break-after: avoid;
+}
+
+p { margin: 0.5em 0; }
+ul, ol { margin: 0.4em 0 0.8em 0; }
+li { margin: 0.2em 0; }
+
+/* ── Callouts (blockquotes) ─────────────────────────────────── */
+blockquote {
+  margin: 0.8em 0;
+  padding: 0.5em 1em;
+  background: #eef6fd;
+  border-left: 4px solid #0078d4;
+  border-radius: 0 6px 6px 0;
+  break-inside: avoid;
+}
+blockquote p { margin: 0.2em 0; }
+
+/* ── Tables ─────────────────────────────────────────────────── */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.7em 0 1em 0;
+  font-size: 9.5pt;
+  break-inside: auto;
+}
+th, td {
+  border: 1px solid #b9c4cf;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: #e3f2fd;
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-weight: bold;
+  color: #0b5fa5;
+}
+tr { break-inside: avoid; }
+
+/* ── Code and preformatted text ─────────────────────────────── */
+code {
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 0.92em;
+  background: #f2f4f6;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+pre {
+  background: #f7f8f9;
+  border: 1px solid #dde3e8;
+  border-radius: 6px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  font-size: 9pt;
+}
+pre code { background: none; padding: 0; }
+
+hr { border: none; border-top: 1px solid #cfd8e0; margin: 1.5em 0; }
+
+strong { color: #0b5fa5; }
+
+/* ── Screenshots ────────────────────────────────────────────── */
+img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #d5dde5;
+  border-radius: 4px;
+  margin: 0.4em 0;
+}
+p img {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 0.3em 0.35em 0.3em 0;
+}

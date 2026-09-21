@@ -27,6 +27,9 @@ app/QMark.exe
 worklog_*.log
 telemetry_*.log
 
+# Guide build artifacts
+docs/**/.build/
+
 # IDE
 .vscode/
 .idea/
