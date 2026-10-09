@@ -540,7 +540,10 @@ inline const QHash<QString, QString>& plDict()
         { "Backup failed: %1", "Błąd kopii zapasowej: %1" },
         { "Scanner", "Skaner" },
         { "Barcode found — edit item: %1", "Znaleziono kod — edytuj przedmiot: %1" },
-        { "Barcode not found — add a new item.", "Nie znaleziono kodu — dodaj nowy przedmiot." },
+        { "Barcode %1 set as the item ID — enter the name and price.",
+          "Kod kreskowy %1 ustawiono jako ID — podaj nazwę i cenę." },
+        { "Scanner mode: scanning a barcode fills the ID field. A barcode that already has an item opens it for editing. The scanned code is put in the ID — not the name — field.",
+          "Tryb skanera: zeskanowany kod kreskowy trafia do pola ID. Kod, który ma już przypisany przedmiot, otwiera go do edycji. Kod trafia do pola ID — nie nazwy." },
         { "Barcode not found: %1", "Nie znaleziono kodu: %1" },
         // ── Business-logic validation & flow messages (translated at the UI boundary) ──
         { "Item name cannot be empty", "Nazwa przedmiotu nie może być pusta" },

@@ -53,6 +53,7 @@ SOURCES += \
     netutil.cpp \
     remoteserver.cpp \
     sanitize_string.cpp \
+    scannerdetect.cpp \
     smtpclient.cpp \
     sqlite_dataaccess.cpp \
     summaryreport.cpp \
@@ -72,6 +73,7 @@ HEADERS += \
     netutil.h \
     pdf_export.h \
     remoteserver.h \
+    scannerdetect.h \
     smtpclient.h \
     sqlite_dataaccess.h \
     statistics.h \

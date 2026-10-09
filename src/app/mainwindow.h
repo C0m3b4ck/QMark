@@ -268,6 +268,10 @@ private:
     void setScannerMode(bool on);
     bool sellItemById(const std::string& itemId);
     void showStatus(const QString& msg, int ms = 7000);
+    void resetScannerBurst();
+    void applySellSearchFilter();
+    void createScannerHintLabels();
+    void updateScannerHints();
     void noteUpdateCheckResult(const QString& result, const QString& detail);
 
     // Widget pointers for the programmatically built Automation page,
@@ -329,6 +333,14 @@ private:
     qint64 m_scannerLastNs = 0;            // nsecs of the last keypress
     qint64 m_scannerGapNs = 0;             // gap to the previous keypress
     bool m_scannerInBurst = false;         // a scanning burst is active
+
+    // ── Telemetry (per-key / per-click recording) ──────────────────
+    QTimer* m_telemetryFlushTimer = nullptr;  // periodic flush of buffered entries
+    bool    m_telemetryOn = false;            // telemetry().open() succeeded
+
+    // ── Scanner-mode hint labels on Add / Edit pages ───────────────
+    QLabel* m_lblScannerHintItem = nullptr;
+    QLabel* m_lblScannerHintItemEdit = nullptr;
 };
 
 #endif // MAINWINDOW_H

@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 // ── Telemetry entry ────────────────────────────────────────────────
 struct TelemetryEntry {
@@ -33,31 +34,23 @@ public:
     }
 
     // Append a single entry to the sink (with the current user context).
+    // Writes are buffered in memory and persisted by flush(); this keeps
+    // per-keystroke/per-click recording cheap even during heavy use.
     void write(const QString& tag, const QString& message) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-
         TelemetryEntry entry;
         entry.timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
         entry.tag = tag;
         entry.message = message;
+        std::lock_guard<std::mutex> lock(m_mutex);
         entry.username = m_username;
         entry.role = m_role;
+        m_pending.push_back(entry);
+    }
 
-        if (m_db) {
-            try {
-                SQLite::Statement stmt(*m_db,
-                    "INSERT INTO telemetry (timestamp, tag, message, user, role) "
-                    "VALUES (?, ?, ?, ?, ?)");
-                stmt.bind(1, entry.timestamp.toStdString());
-                stmt.bind(2, entry.tag.toStdString());
-                stmt.bind(3, entry.message.toStdString());
-                stmt.bind(4, entry.username.toStdString());
-                stmt.bind(5, entry.role.toStdString());
-                stmt.exec();
-            } catch (const std::exception&) {
-                // Swallow — telemetry must never crash the app
-            }
-        }
+    // Persist all buffered entries in one transaction.
+    void flush() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        flushLocked();
     }
 
     // Remember who is operating so every entry carries their username
@@ -83,12 +76,38 @@ public:
 
     void close() {
         std::lock_guard<std::mutex> lock(m_mutex);
+        flushLocked();
         m_db.reset();
     }
 
     ~TelemetryStore() { close(); }
 
 private:
+    // Persist m_pending inside one transaction. Caller holds m_mutex.
+    void flushLocked() {
+        if (m_pending.empty() || !m_db) return;
+        try {
+            m_db->exec("BEGIN");
+            SQLite::Statement stmt(*m_db,
+                "INSERT INTO telemetry (timestamp, tag, message, user, role) "
+                "VALUES (?, ?, ?, ?, ?)");
+            for (const TelemetryEntry& e : m_pending) {
+                stmt.bind(1, e.timestamp.toStdString());
+                stmt.bind(2, e.tag.toStdString());
+                stmt.bind(3, e.message.toStdString());
+                stmt.bind(4, e.username.toStdString());
+                stmt.bind(5, e.role.toStdString());
+                stmt.exec();
+                stmt.reset();
+            }
+            m_db->exec("COMMIT");
+        } catch (const std::exception&) {
+            // Swallow — telemetry must never crash the app
+            try { m_db->exec("ROLLBACK"); } catch (const std::exception&) {}
+        }
+        m_pending.clear();
+    }
+
     void openDb(const QString& path) {
         try {
             m_db = std::make_unique<SQLite::Database>(path.toStdString(),
@@ -111,6 +130,7 @@ private:
     }
 
     std::unique_ptr<SQLite::Database> m_db;
+    std::vector<TelemetryEntry>       m_pending;
     std::mutex                        m_mutex;
     QString                           m_username;
     QString                           m_role;

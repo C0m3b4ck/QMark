@@ -16,6 +16,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "scannerdetect.h"
+
 namespace AppSettings {
 
 // ── Key strings ────────────────────────────────────────────────────
@@ -71,7 +73,14 @@ inline bool remoteEnabled()            { return settings().value(keyRemoteEnable
 inline int  remotePort()               { return settings().value(keyRemotePort(), 8080).toInt(); }
 inline QString remoteToken()           { return settings().value(keyRemoteToken()).toString(); }
 
-inline bool scanEnabled()              { return settings().value(keyScanEnabled(), true).toBool(); }
+// Scanner mode defaults to ON only when a barcode-scanner device is
+// actually found (keyboard-wedge HID). On machines without one, mode
+// stays off until the operator explicitly enables it. The persisted
+// setting always wins once the user has toggled it.
+inline bool scanEnabled() {
+    static const bool hardwareDetected = ScannerProbe::hardwareScannerPresent();
+    return settings().value(keyScanEnabled(), hardwareDetected).toBool();
+}
 
 inline bool mailEnabled()              { return settings().value(keyMailEnabled(), false).toBool(); }
 inline QString mailHost()              { return settings().value(keyMailHost()).toString(); }

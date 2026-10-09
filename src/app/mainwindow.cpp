@@ -48,6 +48,8 @@
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QAbstractButton>
+#include <QMouseEvent>
 #include <QLabel>
 #include <QSpinBox>
 #include <QProgressBar>
@@ -81,6 +83,20 @@
 static QString fmtMoney(double value)
 {
     return Stats::formatMoney(value);
+}
+
+// ── Scanner burst sanity check ─────────────────────────────────────
+// A barcode typed by a wedge scanner is a compact run with no spaces.
+// Human-typed product names usually contain a space, so requiring
+// "no whitespace" prevents a fast-typed phrase + Enter from being taken
+// for a scan.
+static bool looksLikeBarcode(const QString& s)
+{
+    if (s.size() < 2 || s.size() > 64) return false;
+    for (const QChar& c : s) {
+        if (c.isSpace()) return false;
+    }
+    return true;
 }
 
 // ── Local calendar helpers for sale timestamps ─────────────────────
@@ -276,6 +292,12 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
         QString dbPath  = telDir + "/telemetry_" + ts + ".db";
         AppLogger::instance().setLogFile(logPath);
         telemetry().open(dbPath);
+        m_telemetryOn = true;
+        // Record every key press and button click without hammering the
+        // database: entries are buffered and flushed periodically.
+        m_telemetryFlushTimer = new QTimer(this);
+        connect(m_telemetryFlushTimer, &QTimer::timeout, this, [] { telemetry().flush(); });
+        m_telemetryFlushTimer->start(2000);
     }
 
     bool worklogEnabled = settings.value("worklog/enabled", false).toBool();
@@ -327,13 +349,21 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     // widget) holds focus.
     qApp->installEventFilter(this);
 
-    // Sell-page search as you type (live card filtering)
+    // Sell-page search as you type (live card filtering). During an active
+    // scanner burst the intermediate keystrokes are just part of one code,
+    // so the grid rebuild is deferred until the burst ends or Enter seals
+    // the scan (see applySellSearchFilter).
     if (ui->txtSearch_sell_page) {
-        connect(ui->txtSearch_sell_page, &QLineEdit::textChanged, this, [this](const QString& text) {
-            QString term = text.trimmed();
-            if (term.isEmpty()) rebuildItemGrid(m_db.getAllItems());
-            else rebuildItemGrid(m_db.searchItems(term.toStdString(), ""));
+        connect(ui->txtSearch_sell_page, &QLineEdit::textChanged, this, [this](const QString&) {
+            applySellSearchFilter();
         });
+    }
+
+    // ── Sell-page grid takes all leftover vertical space ──────────
+    if (ui->pageSellGrid && ui->scrollAreaItems && ui->pageSellGrid->layout()) {
+        if (QBoxLayout* box = qobject_cast<QBoxLayout*>(ui->pageSellGrid->layout())) {
+            box->setStretchFactor(ui->scrollAreaItems, 1);
+        }
     }
 
     // ── Start at login page ───────────────────────────────────
@@ -351,6 +381,9 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     // ── Scanner mode state (settings-driven; timer for burst timing) ─
     m_scannerKeyTimer.start();
     m_scannerEnabled = AppSettings::scanEnabled();
+
+    // Explain scanner behaviour right on the Add/Edit item pages.
+    createScannerHintLabels();
 
     // Quick scanner toggles on the POS, Add/Edit/Remove item pages and
     // on the Automation settings page all share the same switch.
@@ -608,6 +641,10 @@ void MainWindow::goToPage(int index)
     if (!ui->stackedWidget) return;
     if (index < 0 || index >= ui->stackedWidget->count()) return;
 
+    // Leaving a scan-page mid-burst (menu navigation, login, ...) must not
+    // carry a half-collected code into the next page.
+    resetScannerBurst();
+
     if (m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::UserRole) {
         if (index != 0 && index != 6) return; // clerk: blocked
     }
@@ -618,7 +655,7 @@ void MainWindow::goToPage(int index)
         if (ui->txtUsername_login) ui->txtUsername_login->clear();
         if (ui->txtPassword_login) {
             ui->txtPassword_login->clear();
-            ui->txtPassword_login->setEchoMode(QLineEdit::PasswordEchoOnEdit);
+            ui->txtPassword_login->setEchoMode(QLineEdit::Password);
         }
         if (ui->chkHide_login)     ui->chkHide_login->setChecked(false);
     } else if (index == 5 && m_isLoggedIn) { // undo removed page: auto-populate
@@ -627,11 +664,11 @@ void MainWindow::goToPage(int index)
         if (ui->txtUsername_register)  ui->txtUsername_register->clear();
         if (ui->txtPassword1_register) {
             ui->txtPassword1_register->clear();
-            ui->txtPassword1_register->setEchoMode(QLineEdit::PasswordEchoOnEdit);
+            ui->txtPassword1_register->setEchoMode(QLineEdit::Password);
         }
         if (ui->txtPassword2_register) {
             ui->txtPassword2_register->clear();
-            ui->txtPassword2_register->setEchoMode(QLineEdit::PasswordEchoOnEdit);
+            ui->txtPassword2_register->setEchoMode(QLineEdit::Password);
         }
         if (ui->chkHide_register)      ui->chkHide_register->setChecked(false);
         on_txtPassword1_register_textChanged(QString()); // reset strength bar
@@ -905,13 +942,13 @@ void MainWindow::on_btnHelp_role_register_clicked()
 void MainWindow::on_chkHide_login_toggled(bool checked)
 {
     // The checkbox is labelled "Show password": checked → visible.
-    ui->txtPassword_login->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::PasswordEchoOnEdit);
+    ui->txtPassword_login->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
 }
 
 void MainWindow::on_chkHide_register_toggled(bool checked)
 {
-    ui->txtPassword1_register->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::PasswordEchoOnEdit);
-    ui->txtPassword2_register->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::PasswordEchoOnEdit);
+    ui->txtPassword1_register->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
+    ui->txtPassword2_register->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
 }
 
 void MainWindow::on_txtPassword1_register_textChanged(const QString& text)
@@ -1777,6 +1814,20 @@ void MainWindow::refreshSellPage()
     refreshSellStats();
 }
 
+// Live card filtering for the POS search box. Skipped while a scanner
+// burst is mid-flight (the intermediate characters are all part of one
+// code); it runs again when the burst ends or aborts, so the grid always
+// catches up with what the user actually typed.
+void MainWindow::applySellSearchFilter()
+{
+    if (!ui->txtSearch_sell_page) return;
+    if (!ui->stackedWidget || ui->stackedWidget->currentIndex() != 6) return;
+    if (m_scannerInBurst) return;
+    const QString term = ui->txtSearch_sell_page->text().trimmed();
+    if (term.isEmpty()) rebuildItemGrid(m_db.getAllItems());
+    else rebuildItemGrid(m_db.searchItems(term.toStdString(), ""));
+}
+
 // Simple-view statistics for the POS page: today's totals.
 // All aggregation is delegated to the GUI-independent Stats engine.
 void MainWindow::refreshSellStats()
@@ -1900,7 +1951,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
 {
     QFrame* card = new QFrame();
     card->setFrameShape(QFrame::StyledPanel);
-    card->setMinimumSize(220, 178);
+    card->setMinimumSize(210, 150);
     card->setStyleSheet(
         "QFrame { background: white; border: 2px solid #ddd; border-radius: 10px; margin: 5px; }"
         "QFrame:hover { border-color: #0078d4; }"
@@ -1919,7 +1970,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
     // (fixes white/grey-on-white text on Windows 11).
     QLabel* nameLbl = new QLabel(QString::fromStdString(item.name));
     QFont nameFont = nameLbl->font();
-    nameFont.setPointSize(13);
+    nameFont.setPointSize(12);
     nameFont.setBold(true);
     nameLbl->setFont(nameFont);
     nameLbl->setWordWrap(true);
@@ -1943,7 +1994,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
     // Price
     QLabel* priceLbl = new QLabel(fmtMoney(item.price));
     QFont priceFont = priceLbl->font();
-    priceFont.setPointSize(16);
+    priceFont.setPointSize(15);
     priceFont.setBold(true);
     priceLbl->setFont(priceFont);
     priceLbl->setStyleSheet("color: #2e7d32; background: transparent;");
@@ -1956,7 +2007,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
 
     QLabel* qtyLbl = new QLabel(Tr::trS("Qty: ") + QString::number(item.quantity) +
                                  "  |  " + displayStatusName(item.status));
-    qtyLbl->setStyleSheet("color: " + statusColor + "; font-size: 12px; background: transparent;");
+    qtyLbl->setStyleSheet("color: " + statusColor + "; font-size: 11px; background: transparent;");
     layout->addWidget(qtyLbl);
 
     // Shelf/Category
@@ -1973,11 +2024,11 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
     // Sell button — large touch target
     QPushButton* sellBtn = new QPushButton(Tr::trS("SELL"));
     sellBtn->setObjectName("sellCardBtn");
-    sellBtn->setMinimumHeight(44);
+    sellBtn->setMinimumHeight(34);
     sellBtn->setCursor(Qt::PointingHandCursor);
     sellBtn->setStyleSheet(
-        "QPushButton { background-color: #0078d4; color: white; font-size: 16px; "
-        "font-weight: bold; border: none; border-radius: 8px; padding: 8px; }"
+        "QPushButton { background-color: #0078d4; color: white; font-size: 14px; "
+        "font-weight: bold; border: none; border-radius: 8px; padding: 6px; }"
         "QPushButton:hover { background-color: #005a9e; }"
         "QPushButton:pressed { background-color: #003f7f; }"
         "QPushButton:disabled { background-color: #ccc; color: #666; }"
@@ -2172,6 +2223,9 @@ void MainWindow::undoSaleById(const QString& saleId)
 
     m_db.deleteSale(sale.id);
 
+    m_worklog.logEntry(WorklogEntry::ActionType::Undo, WorklogEntry::EntityType::Sale,
+                       sale.id, "Sale undone: " + itemName.toStdString()
+                       + " x" + std::to_string(sale.quantitySold));
     LOG_INFO("Sale undone: " + itemName + " x" + QString::number(sale.quantitySold));
     refreshSellPage();
     refreshDashboard();
@@ -2237,12 +2291,52 @@ static int sellKeyIndex(int key, const QList<int>& reserved)
 // (they return -1 from sellKeyIndex and fall through to the menus).
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    // A mid-flight scanner burst ends when the operator clicks somewhere:
+    // the typed characters were never consumed, so the card grid has to
+    // catch up with what is currently in the search box.
+    if (m_scannerInBurst && event->type() == QEvent::MouseButtonPress) {
+        resetScannerBurst();
+        applySellSearchFilter();
+    }
+
+    // ── Telemetry: record every key press and every button click ──
+    if (m_telemetryOn) {
+        if (event->type() == QEvent::KeyPress) {
+            auto* kev = static_cast<QKeyEvent*>(event);
+            QString text = kev->text();
+            int keyCode = kev->key();
+            // Never record actual password characters (neither the text nor
+            // a keycode that would reveal them on most keyboard layouts).
+            if (auto* le = qobject_cast<QLineEdit*>(QApplication::focusWidget())) {
+                if (le->echoMode() != QLineEdit::Normal) {
+                    text = QStringLiteral("***");
+                    keyCode = -1;
+                }
+            }
+            const QString where = watched
+                ? QString::fromLatin1(watched->metaObject()->className()) + QLatin1Char('/')
+                  + watched->objectName()
+                : QStringLiteral("-");
+            telemetry().write("KEY", QString("key=0x%1 text='%2' mods=%3 widget=%4")
+                .arg(keyCode, 0, 16).arg(text).arg(int(kev->modifiers())).arg(where));
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            auto* mev = static_cast<QMouseEvent*>(event);
+            auto* btn = qobject_cast<QAbstractButton*>(watched);
+            if (btn && mev->button() == Qt::LeftButton) {
+                const QString name = btn->objectName().isEmpty() ? btn->text() : btn->objectName();
+                telemetry().write("CLICK", name);
+            }
+        }
+    }
+
     // ── Scanner mode (barcode scanner = keyboard wedge) ─────────────
     // A USB/HID scanner "types" the code very fast (all characters within
-    // ~50 ms) and terminates with Enter. We detect such bursts on the POS
-    // page and sell the item directly. Plain keys NOT in a burst pass
-    // through untouched, so manual typing/searching and the Alt+keybinds
-    // below are never affected.
+    // ~50 ms) and terminates with Enter. We detect such bursts on the POS,
+    // Add Item and Edit Item pages and act on the collected code. The
+    // detector NEVER consumes printable characters: every key reaches the
+    // focused widget exactly like manual typing, so a scanner connection
+    // can never break the keyboard. Only the Enter that seals a confirmed
+    // burst is consumed.
     if (event->type() == QEvent::KeyPress
         && watched != this
         && m_scannerEnabled
@@ -2264,15 +2358,17 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 
         // Enter/Return terminator of a scan burst.
         if ((key == Qt::Key_Return || key == Qt::Key_Enter) && !mod) {
-            if (m_scannerInBurst && !m_scannerBuffer.isEmpty()) {
+            if (m_scannerInBurst && !m_scannerBuffer.isEmpty()
+                && looksLikeBarcode(m_scannerBuffer)) {
                 const QString code = m_scannerBuffer;
-                m_scannerInBurst = false;
-                m_scannerBuffer.clear();
-                m_scannerLastNs = 0;
+                resetScannerBurst();
                 handleScannedCode(code);
-                return true;        // consumed: never triggers sell-Enter
+                return true;        // consumed: never triggers normal Enter
             }
-            // No active burst → keep normal Enter behavior (sell highlight).
+            // Not a scan burst (or a burst that contains spaces, i.e. a
+            // human-typed phrase): drop the pending candidate and keep the
+            // normal Enter behavior (sell highlighted item, submit form).
+            if (m_scannerInBurst) resetScannerBurst();
             return QMainWindow::eventFilter(watched, event);
         }
 
@@ -2294,25 +2390,27 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
                 if (m_scannerInBurst) {
                     if (gapNs >= 0 && gapNs <= kScannerBurstNs) {
                         if (m_scannerBuffer.size() < 64) m_scannerBuffer += text;
-                        return true;    // consumed: part of a scanner burst
+                    } else {
+                        // Human pause ended the burst. Every character has
+                        // already reached the focused widget, so just catch
+                        // the card grid up with what the user typed.
+                        resetScannerBurst();
+                        applySellSearchFilter();
                     }
-                    // Gap too large → human typing; abandon the burst.
-                    m_scannerInBurst = false;
-                    m_scannerBuffer.clear();
                 } else if (gapNs >= 0 && gapNs <= kScannerBurstNs && !m_scannerBuffer.isEmpty()) {
-                    // 2nd char right after the 1st (which we did not consume)
-                    // confirms a burst → buffered code is complete.
+                    // 2nd char right after the 1st (which was not consumed)
+                    // confirms a burst → the buffered code is complete.
                     m_scannerInBurst = true;
                     if (m_scannerBuffer.size() < 64) m_scannerBuffer += text;
-                    return true;        // consumed from here on
                 } else {
                     // Candidate first character of a scan. Remember it but
-                    // do NOT consume — a lone fast key must not disappear.
+                    // do NOT consume — a lone fast key must never disappear.
                     m_scannerBuffer = text;
-                    return QMainWindow::eventFilter(watched, event);
                 }
             }
         }
+        // Printable scan characters always reach the focused widget: they
+        // are never part of the "broken keyboard" path.
     }
     }
 
@@ -4082,6 +4180,47 @@ void MainWindow::setScannerMode(bool on)
     syncCheck(ui->chkScanner_item_edit);
     syncCheck(ui->chkScanner_remove);
     syncCheck(m_autoUi.chkScanner);
+    updateScannerHints();
+}
+
+// Forget any in-flight scanner burst (page change, sealed scan, ...).
+void MainWindow::resetScannerBurst()
+{
+    m_scannerInBurst = false;
+    m_scannerBuffer.clear();
+    m_scannerLastNs = 0;
+}
+
+// Explain what scanner mode does right on the Add/Edit item pages, so an
+// operator with the name field focused knows a scan targets the ID field.
+void MainWindow::createScannerHintLabels()
+{
+    const QString hint = Tr::trS(
+        "Scanner mode: scanning a barcode fills the ID field. A barcode "
+        "that already has an item opens it for editing. The scanned code "
+        "is put in the ID — not the name — field.");
+    auto makeLabel = [hint](const QString& objectName) -> QLabel* {
+        QLabel* lbl = new QLabel(hint);
+        lbl->setObjectName(objectName);
+        lbl->setWordWrap(true);
+        lbl->setStyleSheet("color: #0078d4; background: transparent; font-size: 12px;");
+        return lbl;
+    };
+    if (ui->pageAddItem && ui->pageAddItem->layout()) {
+        m_lblScannerHintItem = makeLabel(QStringLiteral("lblScannerHint_item"));
+        qobject_cast<QBoxLayout*>(ui->pageAddItem->layout())->insertWidget(1, m_lblScannerHintItem);
+    }
+    if (ui->pageEditItem && ui->pageEditItem->layout()) {
+        m_lblScannerHintItemEdit = makeLabel(QStringLiteral("lblScannerHint_item_edit"));
+        qobject_cast<QBoxLayout*>(ui->pageEditItem->layout())->insertWidget(1, m_lblScannerHintItemEdit);
+    }
+}
+
+void MainWindow::updateScannerHints()
+{
+    const bool show = m_scannerEnabled;
+    if (m_lblScannerHintItem)     m_lblScannerHintItem->setVisible(show);
+    if (m_lblScannerHintItemEdit) m_lblScannerHintItemEdit->setVisible(show);
 }
 
 void MainWindow::startAddWithBarcode(const QString& code)
@@ -4105,7 +4244,8 @@ void MainWindow::startAddWithBarcode(const QString& code)
         ui->txtId_item->setText(code);
     }
     if (ui->txtName_item) ui->txtName_item->setFocus();
-    showStatus(Tr::trS("Barcode not found — add a new item."), 5000);
+    showStatus(Tr::trS("Barcode %1 set as the item ID — enter the name and price.")
+                   .arg(code), 5000);
 }
 
 void MainWindow::handleScannedCode(const QString& code)

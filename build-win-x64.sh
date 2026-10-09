@@ -216,6 +216,7 @@ QMARK_SRCS=(
     netutil.cpp
     remoteserver.cpp
     sanitize_string.cpp
+    scannerdetect.cpp
     smtpclient.cpp
     sqlite_dataaccess.cpp
     summaryreport.cpp
