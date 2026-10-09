@@ -261,6 +261,7 @@ private:
     void sendSummaryEmailNow(bool monthly);
     void createBackupNow();
     void checkUpdatesNow();
+    void restorePreviousRelease();
     void handleScannedCode(const QString& code);
     void startAddWithBarcode(const QString& code);
     void loadItemToEdit(const QString& id);

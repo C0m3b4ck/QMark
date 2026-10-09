@@ -3557,6 +3557,10 @@ QWidget* MainWindow::buildAutomationPage()
         connect(btnCheck, &QPushButton::clicked, this, [this]() {
             checkUpdatesNow();
         });
+
+        QPushButton* btnRestore = new QPushButton(Tr::trS("Restore previous release"));
+        v->addWidget(btnRestore);
+        connect(btnRestore, &QPushButton::clicked, this, &MainWindow::restorePreviousRelease);
     }
 
     // ── Save button ──
@@ -4020,6 +4024,32 @@ void MainWindow::checkUpdatesNow()
             }).detach();
         }, Qt::QueuedConnection);
     }).detach();
+}
+
+// ── Restore: swap <exe>.old (the previous release) back in ────────
+void MainWindow::restorePreviousRelease()
+{
+    const QString target = QCoreApplication::applicationFilePath();
+    if (!QFile::exists(target + ".old")) {
+        QMessageBox::information(this, Tr::trS("Restore Previous Release"),
+            Tr::trS("No previous release backup found. Install an update at least once to create one."));
+        return;
+    }
+
+    const int choice = QMessageBox::question(
+        this, Tr::trS("Restore Previous Release"),
+        Tr::trS("Replace the current program with the previous release and restart?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (choice != QMessageBox::Yes) return;
+
+    QString err;
+    if (!Updater::restore(target, &err)) {
+        QMessageBox::warning(this, Tr::trS("Restore Previous Release"),
+            Tr::trS("Could not restore the previous release: %1").arg(Tr::trS(err)));
+        return;
+    }
+    // Updater::restore() relaunched the restored binary; leave now.
+    close();
 }
 
 void MainWindow::noteUpdateCheckResult(const QString& result, const QString& detail)

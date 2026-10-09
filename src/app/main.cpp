@@ -3,6 +3,7 @@
 #include "logger.h"
 #include "telemetry.h"
 #include "businesslogic.h"
+#include "updater.h"
 #include <QApplication>
 #include <QDateTime>
 #include <QSettings>
@@ -37,6 +38,10 @@ static void cleanupLogger() {
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
+
+    // Remove stale <exe>.part / <exe>.tmp left by an interrupted update
+    // or restore from the previous run.
+    Updater::cleanupArtifacts();
 
     // ── Force Fusion style + explicit light palette ─────────────────
     // Fixes "invisible" (white-on-white) text on some platforms,
