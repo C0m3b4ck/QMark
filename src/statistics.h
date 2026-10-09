@@ -214,8 +214,8 @@ inline QString buildReportText(const Snapshot& snap, const std::vector<Domain::I
     int lowStock = 0, outOfStock = 0;
     QStringList lowStockList;
     for (const auto& item : items) {
-        if (item.status == "Low Stock") { lowStock++; lowStockList << QString::fromStdString(item.name); }
-        if (item.status == "Out of Stock" || item.status == "Sold Out") outOfStock++;
+        if (Domain::statusIsLowStock(item.status)) { lowStock++; lowStockList << QString::fromStdString(item.name); }
+        if (Domain::statusIsOutOfStock(item.status)) outOfStock++;
     }
     report += Tr::trS("Low Stock: ") + QString::number(lowStock) + "\n";
     report += Tr::trS("Out of Stock: ") + QString::number(outOfStock) + "\n\n";

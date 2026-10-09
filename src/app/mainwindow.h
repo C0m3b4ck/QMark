@@ -7,6 +7,7 @@
 #include <QGridLayout>
 #include <QScrollArea>
 #include <QVector>
+#include <QElapsedTimer>
 #include <optional>
 #include "domain.h"
 #include "businesslogic.h"
@@ -14,6 +15,13 @@
 #include "worklog.h"
 
 class QTimer;
+class QCheckBox;
+class QComboBox;
+class QSpinBox;
+class QLineEdit;
+class QPlainTextEdit;
+class QTimeEdit;
+class RemoteServer;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -171,6 +179,10 @@ private slots:
     void on_btnConvertPrices_pref_clicked();
     void on_chkWorklog_toggled(bool checked);
 
+    // ── Automation & Remote ───────────────────────────────────────
+    void on_actionAutomation_triggered();
+    void onAutomationSaveClicked();
+
     // ── Worklog Stats ─────────────────────────────────────────────
     void on_actionWorklogStats_triggered();
     void on_btnRefreshWorklog_clicked();
@@ -235,8 +247,87 @@ private:
     QVector<QWidget*> m_sellCards;           // card widgets in grid order
     int m_sellHighlightIndex = -1;           // currently highlighted card (-1 = none)
 
-    // Dashboard clock (updates every second)
+    // ── Dashboard clock (updates every second) ────────────────────
     QTimer *m_clockTimer = nullptr;
+
+    // ── Automation (scanner / e-mail / backups / update / remote) ─
+    QWidget* buildAutomationPage();
+    QWidget* m_automationPage = nullptr;
+    void applyAutomationPageSettings();
+    void saveAutomationPageSettings();
+    void startRemoteServerIfEnabled();
+    void stopRemoteServer();
+    void onSchedulerTick();
+    void sendSummaryEmailNow(bool monthly);
+    void createBackupNow();
+    void checkUpdatesNow();
+    void handleScannedCode(const QString& code);
+    void startAddWithBarcode(const QString& code);
+    void loadItemToEdit(const QString& id);
+    void setScannerMode(bool on);
+    bool sellItemById(const std::string& itemId);
+    void showStatus(const QString& msg, int ms = 7000);
+    void noteUpdateCheckResult(const QString& result, const QString& detail);
+
+    // Widget pointers for the programmatically built Automation page,
+    // so Tr::applyLanguage() + save/load can reach them by name.
+    struct AutomationUi {
+        // Scanner mode
+        QCheckBox* chkScanner = nullptr;
+        // Remote dashboard
+        QCheckBox* chkRemote = nullptr;
+        QSpinBox*  spinRemotePort = nullptr;
+        QLineEdit* txtRemoteToken = nullptr;
+        QLabel*    lblRemoteStatus = nullptr;
+        // E-mail summary
+        QCheckBox*     chkMail = nullptr;
+        QLineEdit*     txtMailHost = nullptr;
+        QSpinBox*      spinMailPort = nullptr;
+        QComboBox*     cboMailSecurity = nullptr;
+        QLineEdit*     txtMailUser = nullptr;
+        QLineEdit*     txtMailPass = nullptr;
+        QLineEdit*     txtMailFrom = nullptr;
+        QPlainTextEdit* txtMailRecipients = nullptr;
+        QCheckBox*     chkMailDaily = nullptr;
+        QTimeEdit*     timeMailDaily = nullptr;
+        QCheckBox*     chkMailMonthly = nullptr;
+        QSpinBox*      spinMailMonthlyDay = nullptr;
+        QTimeEdit*     timeMailMonthly = nullptr;
+        QCheckBox*     chkMailAttach = nullptr;
+        QLabel*        lblMailStatus = nullptr;
+        // Backups
+        QLineEdit* txtBackupFolder = nullptr;
+        QSpinBox*  spinBackupKeep = nullptr;
+        QCheckBox* chkBackupSchedule = nullptr;
+        QTimeEdit* timeBackupSchedule = nullptr;
+        QCheckBox* chkBackupOnlineMail = nullptr;
+        QCheckBox* chkBackupOnlineHttp = nullptr;
+        QLineEdit* txtBackupHttpUrl = nullptr;
+        QLineEdit* txtBackupHttpToken = nullptr;
+        QLabel*    lblBackupStatus = nullptr;
+        // Auto-update
+        QCheckBox* chkUpdates = nullptr;
+        QLabel*    lblUpdateStatus = nullptr;
+    };
+    AutomationUi m_autoUi;
+
+    RemoteServer* m_remoteServer = nullptr;
+    QTimer* m_schedulerTimer = nullptr;
+    bool m_mailInProgress = false;
+    bool m_backupInProgress = false;
+    bool m_updateCheckInProgress = false;
+    // True while applyAutomationPageSettings() populates the widgets; the
+    // toggled() handlers must not persist half-filled state during that.
+    bool m_applyingAutomationSettings = false;
+
+    // ── Scanner mode state ─────────────────────────────────────────
+    bool m_scannerEnabled = false;
+    bool m_scannerHasCustomList = false;   // reserved for future use
+    QElapsedTimer m_scannerKeyTimer;       // burst gap measurement
+    QString m_scannerBuffer;               // chars collected in the burst
+    qint64 m_scannerLastNs = 0;            // nsecs of the last keypress
+    qint64 m_scannerGapNs = 0;             // gap to the previous keypress
+    bool m_scannerInBurst = false;         // a scanning burst is active
 };
 
 #endif // MAINWINDOW_H

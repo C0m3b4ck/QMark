@@ -173,6 +173,7 @@ CXXFLAGS="-std=c++17 -O2 -Wall -DWIN32 -DUNICODE -D_UNICODE -DMINGW_HAS_SECURE_A
   -I$QT_DIR/include/QtGui \
   -I$QT_DIR/include/QtWidgets \
   -I$QT_DIR/include/QtSql \
+  -I$QT_DIR/include/QtNetwork \
   -I$SQLITECPP_DIR/include \
   -I$SQLITE3_DIR \
   -I$SODIUM_DIR/include \
@@ -207,12 +208,19 @@ echo "  libSQLiteCpp.a built ($(echo "$SQLITECPP_SRCS" | wc -l) files)"
 echo "[5/7] Compiling QMark sources..."
 
 QMARK_SRCS=(
+    backup.cpp
     businesslogic.cpp
     crypto.cpp
     main.cpp
     mainwindow.cpp
+    netutil.cpp
+    remoteserver.cpp
     sanitize_string.cpp
+    smtpclient.cpp
     sqlite_dataaccess.cpp
+    summaryreport.cpp
+    updater.cpp
+    zipwriter.cpp
 )
 
 QMARK_OBJS=""
@@ -229,6 +237,11 @@ echo "  moc_mainwindow.cpp..."
 $CXX $CXXFLAGS -c "$BUILD_DIR/obj/moc_mainwindow.cpp" -o "$BUILD_DIR/obj/moc_mainwindow.o" 2>&1 | head -5
 QMARK_OBJS="$QMARK_OBJS $BUILD_DIR/obj/moc_mainwindow.o"
 
+echo "  moc_remoteserver.cpp..."
+"$MOC_PATH" remoteserver.h -o "$BUILD_DIR/obj/moc_remoteserver.cpp" 2>&1
+$CXX $CXXFLAGS -c "$BUILD_DIR/obj/moc_remoteserver.cpp" -o "$BUILD_DIR/obj/moc_remoteserver.o" 2>&1 | head -5
+QMARK_OBJS="$QMARK_OBJS $BUILD_DIR/obj/moc_remoteserver.o"
+
 # ── Link ──────────────────────────────────────────────────────────
 echo "[6/7] Linking QMark.exe..."
 
@@ -242,6 +255,7 @@ $CXX -static -static-libgcc -static-libstdc++ \
   -L"$SODIUM_DIR/lib" -lsodium \
   -L"$QT_DIR/lib" \
   -lQt6Widgets -lQt6Gui -lQt6Core -lQt6Sql \
+  -lQt6Network \
   -lQt6Svg -lQt6SvgWidgets -lQt6EntryPoint \
   -lQt6BundledFreetype -lQt6BundledHarfbuzz -lQt6BundledLibjpeg -lQt6BundledLibpng -lQt6BundledPcre2 -lQt6BundledZLIB \
   -L"$QT_DIR/plugins/platforms" -lqwindows \
@@ -249,6 +263,7 @@ $CXX -static -static-libgcc -static-libstdc++ \
   -L"$QT_DIR/plugins/imageformats" -lqgif -lqico -lqjpeg -lqsvg -lqtiff -lqwebp -lqtga -lqwbmp -lqicns \
   -L"$QT_DIR/plugins/iconengines" -lqsvgicon \
   -L"$QT_DIR/plugins/styles" -lqmodernwindowsstyle \
+  -L"$QT_DIR/plugins/tls" -lqschannelbackend \
   -ld3d11 -ld3d12 -ldxgi -ldwrite -lsetupapi -ld3d9 -lshcore -lwtsapi32 \
   -lauthz -lmincore -lntdll -lnetapi32 -luserenv -ldbghelp \
   -lmingw32 -lwindowscodecs -limm32 -lole32 -loleaut32 -luuid -lws2_32 \

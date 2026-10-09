@@ -76,6 +76,19 @@ After the initial SuperAdmin is created, you can log in and create additional us
 
 ---
 
+## Documentation
+
+User and administration guides are available in **English** and **Polish**, as Markdown and PDF:
+
+| Guide | English | Polish |
+|---|---|---|
+| **User Guide** (till operators / Clerks) | [Markdown](docs/guides/QMark_User_Guide_EN.md) · [PDF](docs/guides/QMark_User_Guide_EN.pdf) | [Markdown](docs/guides/QMark_User_Guide_PL.md) · [PDF](docs/guides/QMark_User_Guide_PL.pdf) |
+| **SuperAdmin Guide** (administration, accounts, automation) | [Markdown](docs/guides/QMark_SuperAdmin_Guide_EN.md) · [PDF](docs/guides/QMark_SuperAdmin_Guide_EN.pdf) | [Markdown](docs/guides/QMark_SuperAdmin_Guide_PL.md) · [PDF](docs/guides/QMark_SuperAdmin_Guide_PL.pdf) |
+
+Rebuild the PDFs from the Markdown sources with `docs/guides/build-pdfs.sh` (requires `pandoc` and `chromium`).
+
+---
+
 ## Building from Source
 
 See **[BUILD.md](BUILD.md)** for complete build instructions for all supported platforms:

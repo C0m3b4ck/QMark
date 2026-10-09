@@ -22,6 +22,11 @@ Q_IMPORT_PLUGIN(QJpegPlugin)
 Q_IMPORT_PLUGIN(QSvgPlugin)
 Q_IMPORT_PLUGIN(QSvgIconPlugin)
 Q_IMPORT_PLUGIN(QModernWindowsStylePlugin)
+// TLS backend for Qt Network on Windows: the native Windows SChannel
+// backend (no OpenSSL needed). Only exists in Windows Qt builds.
+#ifdef Q_OS_WIN
+Q_IMPORT_PLUGIN(QSchannelBackend)
+#endif
 #endif
 
 static void cleanupLogger() {

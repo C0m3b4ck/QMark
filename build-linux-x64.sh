@@ -39,18 +39,35 @@ fi
 
 # ── Prepare build directory ───────────────────────────────────────
 echo "[2/4] Preparing build directory..."
+# Always start clean: a stale sub-Makefile keeps the qmake/spec it was
+# generated with and silently ignores the flags passed on the command line.
+rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cd "$SRC_DIR"
 
 # ── Build via qmake ──────────────────────────────────────────────
 echo "[3/4] Building with qmake..."
-make clean 2>/dev/null || true
 
-qmake6 QMark.pro \
-    QMAKE_CFLAGS="-static" \
-    QMAKE_CXXFLAGS="-static" \
-    QMAKE_LFLAGS="-static -static-libgcc -static-libstdc++" \
-    -o "$BUILD_DIR/Makefile"
+QMAKE="${QMAKE:-qmake6}"
+
+# Prefer a fully static link, but only when the Qt in use actually ships
+# static libraries. Forcing -static against a shared-only distro Qt fails
+# with "attempted static link of dynamic object". Override the detection
+# with QMARK_STATIC=1 (force static) or QMARK_STATIC=0 (force dynamic).
+QT_LIBDIR="$("$QMAKE" -query QT_INSTALL_LIBS 2>/dev/null || true)"
+WANT_STATIC="${QMARK_STATIC:-auto}"
+if [ "$WANT_STATIC" = "1" ] \
+   || { [ "$WANT_STATIC" = "auto" ] && [ -f "$QT_LIBDIR/libQt6Core.a" ]; }; then
+    echo "  Linking: static (Qt static libs in $QT_LIBDIR)"
+    "$QMAKE" QMark.pro \
+        QMAKE_CFLAGS="-static" \
+        QMAKE_CXXFLAGS="-static" \
+        QMAKE_LFLAGS="-static -static-libgcc -static-libstdc++" \
+        -o "$BUILD_DIR/Makefile"
+else
+    echo "  Linking: dynamic (no static Qt found; set QMARK_STATIC=1 to force)"
+    "$QMAKE" QMark.pro -o "$BUILD_DIR/Makefile"
+fi
 
 make -C "$BUILD_DIR" -j"$JOBS"
 

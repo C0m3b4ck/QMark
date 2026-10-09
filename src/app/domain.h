@@ -54,6 +54,31 @@ inline bool isValidId(const std::string& id) {
     return !id.empty() && id != "0";
 }
 
+// ── Item status ───────────────────────────────────────────────────
+// Language-independent status codes stored in the database and used in
+// every comparison. Display names are localized in the UI layer only, so
+// swapping the UI language never touches stored data.
+inline const std::string& statusInStock()    { static const std::string s = "0"; return s; }
+inline const std::string& statusLowStock()   { static const std::string s = "1"; return s; }
+inline const std::string& statusOutOfStock() { static const std::string s = "2"; return s; }
+inline const std::string& statusSoldOut()    { static const std::string s = "3"; return s; }
+
+inline bool statusIsInStock(const std::string& s)    { return s == statusInStock(); }
+inline bool statusIsLowStock(const std::string& s)   { return s == statusLowStock(); }
+inline bool statusIsOutOfStock(const std::string& s) { return s == statusOutOfStock() || s == statusSoldOut(); }
+inline bool statusIsSoldOut(const std::string& s)    { return s == statusSoldOut(); }
+
+// Maps legacy textual names ("In Stock", ...) to codes so databases
+// created by older versions keep working without a schema change.
+inline std::string statusFromLegacy(const std::string& s)
+{
+    if (s == "In Stock") return statusInStock();
+    if (s == "Low Stock") return statusLowStock();
+    if (s == "Out of Stock") return statusOutOfStock();
+    if (s == "Sold Out") return statusSoldOut();
+    return s;                       // already a code (or unknown value)
+}
+
 // ── Item (replaces Book) ──────────────────────────────────────────
 
 struct Item {
@@ -63,7 +88,8 @@ struct Item {
     double price = 0.0;
     std::string category;
     std::string shelf;          // physical shelf / location in shop
-    std::string status;         // "In Stock", "Low Stock", "Out of Stock", "Sold Out"
+    std::string status;         // status code: "0"=In Stock, "1"=Low Stock,
+                                // '2'=Out of Stock, "3"=Sold Out (see helpers above)
     DateTime createdAt;
     DateTime updatedAt;
 

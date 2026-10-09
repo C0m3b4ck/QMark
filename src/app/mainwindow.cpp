@@ -9,10 +9,32 @@
 #include "charts.h"
 #include "statistics.h"
 #include "pdf_export.h"
+
+// Automation & remote-feature modules.
+#include "appsettings.h"
+#include "backup.h"
+#include "netutil.h"
+#include "remoteserver.h"
+#include "smtpclient.h"
+#include "summaryreport.h"
+#include "updater.h"
+#include "version.h"
+#include "zipwriter.h"
+
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QGroupBox>
+#include <QPlainTextEdit>
+#include <QRadioButton>
+#include <QTimeEdit>
+#include <QToolButton>
+#include <QScroller>
+#include <QThread>
+#include <QMetaObject>
 #include <QCloseEvent>
 #include <QResizeEvent>
 #include <QKeyEvent>
@@ -42,6 +64,13 @@
 #include <QFile>
 #include <QTextStream>
 #include <QPointer>
+#include <QFileInfo>
+#include <QRandomGenerator>
+#include <QProcess>
+#include <QHostInfo>
+#include <QTime>
+#include <thread>
+#include <chrono>
 #include <sstream>
 #include <iomanip>
 #include <memory>
@@ -125,15 +154,71 @@ static QString sellKeyHint(int index, const QList<int>& reserved, bool enabled)
 // The data layer formats these rows in English ("Qty:", "Shelf:", ...);
 // the UI rebuilds them through the translation layer so Polish users
 // see Polish labels.
+static QString displayStatusName(const std::string& code)
+{
+    if (Domain::statusIsInStock(code))    return Tr::trS("In Stock");
+    if (Domain::statusIsLowStock(code))   return Tr::trS("Low Stock");
+    if (Domain::statusIsOutOfStock(code)) return Tr::trS("Out of Stock");
+    if (Domain::statusIsSoldOut(code))    return Tr::trS("Sold Out");
+    return QString::fromStdString(code);
+}
+
+// Business-logic messages are English by design (a stable data-layer
+// interface); translate them at the UI boundary. Two messages embed
+// dynamic values (current stock level / required role) and are matched
+// by prefix/suffix so the stored English text never leaks to the user.
+static QString translatedBusinessMessage(const std::string& raw)
+{
+    const QString text = QString::fromStdString(raw);
+
+    const QString stockPfx = QStringLiteral("Insufficient stock (available: ");
+    if (text.startsWith(stockPfx) && text.endsWith(QLatin1Char(')'))) {
+        const QString qty = text.mid(stockPfx.size(), text.size() - stockPfx.size() - 1);
+        return Tr::trS("Insufficient stock (available: %1)").arg(qty);
+    }
+
+    const QString rolePfx = QStringLiteral("Access denied. Requires ");
+    const QString roleSuf = QStringLiteral(" role or higher.");
+    if (text.startsWith(rolePfx) && text.endsWith(roleSuf)) {
+        const QString role = text.mid(rolePfx.size(),
+                                      text.size() - rolePfx.size() - roleSuf.size());
+        return Tr::trS("Access denied. Requires %1 role or higher.").arg(Tr::trS(role));
+    }
+
+    return Tr::trS(text);
+}
+
 static QString itemListText(const Domain::Item& it)
 {
     return QString::fromStdString(it.name) + " | "
         + Tr::trS("Qty: ") + QString::number(it.quantity) + " | "
         + fmtMoney(it.price) + " | "
-        + Tr::trS(QString::fromStdString(it.status)) + " | "
+        + displayStatusName(it.status) + " | "
         + Tr::trS("Shelf: ") + QString::fromStdString(it.shelf) + " | "
         + Tr::trS("Category: ") + QString::fromStdString(it.category) + " | "
         + Tr::trS("ID: ") + QString::fromStdString(it.id);
+}
+
+// Rebuild a status combo: localized display text over language-
+// independent numeric codes (item data), preserving the current
+// selection by code. The codes are what gets stored/compared, so the
+// UI language can be switched without touching any data.
+static void rebuildStatusCombo(QComboBox* cb)
+{
+    if (!cb) return;
+    const QVariant selected = cb->currentData();
+    cb->clear();
+    const struct StatusItem { const char* name; const char* code; } statuses[] = {
+        { "In Stock", "0" }, { "Low Stock", "1" },
+        { "Out of Stock", "2" }, { "Sold Out", "3" },
+    };
+    for (const auto& s : statuses) {
+        cb->addItem(Tr::trS(QString::fromLatin1(s.name)), QString::fromLatin1(s.code));
+    }
+    if (selected.isValid()) {
+        const int idx = cb->findData(selected);
+        if (idx >= 0) cb->setCurrentIndex(idx);
+    }
 }
 
 static QString saleListText(const Domain::Sale& s,
@@ -254,8 +339,44 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     // ── Start at login page ───────────────────────────────────
     goToPage(0);
 
+    // "Auto-generate ID" is checked by default: sync the Add Item form
+    // (field disabled + a fresh candidate ID) with that state.
+    if (ui->chkAutogenerateID_item && ui->chkAutogenerateID_item->isChecked()) {
+        on_chkAutogenerateID_item_toggled(true);
+    }
+
     // ── Build resupply page (appended to the stack) ───────────
     m_resupplyPage = buildResupplyPage();
+
+    // ── Scanner mode state (settings-driven; timer for burst timing) ─
+    m_scannerKeyTimer.start();
+    m_scannerEnabled = AppSettings::scanEnabled();
+
+    // Quick scanner toggles on the POS, Add/Edit/Remove item pages and
+    // on the Automation settings page all share the same switch.
+    setScannerMode(m_scannerEnabled);   // sync initial checked state
+    auto wireScannerToggle = [this](QCheckBox* cb) {
+        if (!cb) return;
+        connect(cb, &QCheckBox::toggled, this, [this](bool on) {
+            setScannerMode(on);
+            showStatus(Tr::trS(on ? "Scanner mode enabled." : "Scanner mode disabled."), 3000);
+        });
+    };
+    wireScannerToggle(ui->chkScanner_sell);
+    wireScannerToggle(ui->chkScanner_item);
+    wireScannerToggle(ui->chkScanner_item_edit);
+    wireScannerToggle(ui->chkScanner_remove);
+
+    // ── Build Automation & Remote page (appended after resupply) ─
+    m_automationPage = buildAutomationPage();
+
+    // ── Remote dashboard: bring up if enabled by the SuperAdmin ─
+    startRemoteServerIfEnabled();
+
+    // ── Scheduler: daily/monthly e-mail, scheduled backups, etc. ─
+    m_schedulerTimer = new QTimer(this);
+    connect(m_schedulerTimer, &QTimer::timeout, this, [this] { onSchedulerTick(); });
+    m_schedulerTimer->start(30 * 1000);   // every 30 s; tasks fire on their minute
 
     // ── First-run: if no users exist, show setup form ─────────
     if (m_db.getAllUsers().empty()) {
@@ -269,10 +390,17 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     applyLanguageToUi();
     applyRoleRestrictions();
     updatePricePlaceholders();
+
+    // ── Auto-update check (SuperAdmin-toggleable, on startup) ──
+    if (AppSettings::updateEnabled()) {
+        QTimer::singleShot(3 * 1000, this, [this] { checkUpdatesNow(); });
+    }
 }
 
 MainWindow::~MainWindow()
 {
+    stopRemoteServer();
+    if (m_schedulerTimer) m_schedulerTimer->stop();
     delete ui;
 }
 
@@ -488,14 +616,23 @@ void MainWindow::goToPage(int index)
     // login / register pages are (re)loaded.
     if (index == 0) { // login page
         if (ui->txtUsername_login) ui->txtUsername_login->clear();
-        if (ui->txtPassword_login) ui->txtPassword_login->clear();
+        if (ui->txtPassword_login) {
+            ui->txtPassword_login->clear();
+            ui->txtPassword_login->setEchoMode(QLineEdit::PasswordEchoOnEdit);
+        }
         if (ui->chkHide_login)     ui->chkHide_login->setChecked(false);
     } else if (index == 5 && m_isLoggedIn) { // undo removed page: auto-populate
         refreshRemovedItemsList();
     } else if (index == 16) { // register page
         if (ui->txtUsername_register)  ui->txtUsername_register->clear();
-        if (ui->txtPassword1_register) ui->txtPassword1_register->clear();
-        if (ui->txtPassword2_register) ui->txtPassword2_register->clear();
+        if (ui->txtPassword1_register) {
+            ui->txtPassword1_register->clear();
+            ui->txtPassword1_register->setEchoMode(QLineEdit::PasswordEchoOnEdit);
+        }
+        if (ui->txtPassword2_register) {
+            ui->txtPassword2_register->clear();
+            ui->txtPassword2_register->setEchoMode(QLineEdit::PasswordEchoOnEdit);
+        }
         if (ui->chkHide_register)      ui->chkHide_register->setChecked(false);
         on_txtPassword1_register_textChanged(QString()); // reset strength bar
     }
@@ -513,6 +650,7 @@ void MainWindow::goToPage(int index)
 void MainWindow::applyRoleRestrictions()
 {
     bool clerk = m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::UserRole;
+    bool superAdmin = m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::SuperAdmin;
 
     if (ui->menuItems) ui->menuItems->menuAction()->setVisible(!clerk);
     if (ui->menuSales) ui->menuSales->menuAction()->setVisible(!clerk);
@@ -522,6 +660,10 @@ void MainWindow::applyRoleRestrictions()
     if (ui->menuFile) {
         if (ui->actionLog_in) ui->actionLog_in->setVisible(!clerk);
         if (ui->actionRegister) ui->actionRegister->setVisible(!clerk);
+    }
+    // The automation & remote settings page is SuperAdmin-only.
+    if (ui->actionAutomation) {
+        ui->actionAutomation->setVisible(superAdmin);
     }
 }
 
@@ -533,6 +675,7 @@ void MainWindow::applyLanguageToUi()
     if (menuBar()) Tr::applyLanguage(menuBar());
     if (m_resupplyPage) Tr::applyLanguage(m_resupplyPage);
     if (m_firstRunPage) Tr::applyLanguage(m_firstRunPage);
+    if (m_automationPage) Tr::applyLanguage(m_automationPage);
     updatePricePlaceholders();
     syncLanguageUi();
     // Dashboard calendar follows the UI language, too.
@@ -570,6 +713,19 @@ void MainWindow::syncLanguageUi()
         const QString canonical[3] = { "Clerk", "Admin", "SuperAdmin" };
         for (int i = 0; i < 3 && i < ui->cboRole_register->count(); ++i) {
             ui->cboRole_register->setItemText(i, Tr::trS(canonical[i]));
+        }
+    }
+    // Status combo boxes: localized display names over language-
+    // independent numeric codes, so switching language never touches data.
+    rebuildStatusCombo(ui->cboStatus_item);
+    rebuildStatusCombo(ui->cboStatus_item_edit);
+    // Search-field combo on the Edit page: localized labels over the
+    // canonical field codes used by the SQL queries.
+    if (ui->cboSearchField_item_edit) {
+        const QString canonical[5] = { "All", "Name", "Category", "Shelf", "Status" };
+        for (int i = 0; i < 5 && i < ui->cboSearchField_item_edit->count(); ++i) {
+            ui->cboSearchField_item_edit->setItemData(i, canonical[i].toLower());
+            ui->cboSearchField_item_edit->setItemText(i, Tr::trS(canonical[i]));
         }
     }
 }
@@ -626,7 +782,7 @@ bool MainWindow::checkRoleRequired(BusinessLogic::RequiredRole required, bool)
     }
     auto check = BusinessLogic::checkUserRole(m_currentUser, required);
     if (!check.hasAccess) {
-        QMessageBox::warning(this, Tr::trS("Access Denied"), QString::fromStdString(check.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Access Denied"), translatedBusinessMessage(check.errorMessage));
         return false;
     }
     return true;
@@ -728,7 +884,7 @@ void MainWindow::on_btnRegister_clicked()
         QMessageBox::information(this, Tr::trS("Register"), Tr::trS("User registered successfully."));
         LOG_INFO("User registered: " + username);
     } else {
-        QMessageBox::warning(this, "Register", QString::fromStdString(result.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Register"), translatedBusinessMessage(result.errorMessage));
     }
 }
 
@@ -748,13 +904,14 @@ void MainWindow::on_btnHelp_role_register_clicked()
 
 void MainWindow::on_chkHide_login_toggled(bool checked)
 {
-    ui->txtPassword_login->setEchoMode(checked ? QLineEdit::PasswordEchoOnEdit : QLineEdit::Normal);
+    // The checkbox is labelled "Show password": checked → visible.
+    ui->txtPassword_login->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::PasswordEchoOnEdit);
 }
 
 void MainWindow::on_chkHide_register_toggled(bool checked)
 {
-    ui->txtPassword1_register->setEchoMode(checked ? QLineEdit::PasswordEchoOnEdit : QLineEdit::Normal);
-    ui->txtPassword2_register->setEchoMode(checked ? QLineEdit::PasswordEchoOnEdit : QLineEdit::Normal);
+    ui->txtPassword1_register->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::PasswordEchoOnEdit);
+    ui->txtPassword2_register->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::PasswordEchoOnEdit);
 }
 
 void MainWindow::on_txtPassword1_register_textChanged(const QString& text)
@@ -849,7 +1006,10 @@ void MainWindow::on_btnAdd_item_clicked()
     QString price = ui->txtPrice_item->text().trimmed();
     QString category = ui->txtCategory_item->text().trimmed();
     QString shelf = ui->txtShelf_item->text().trimmed();
-    QString status = ui->cboStatus_item ? ui->cboStatus_item->currentText() : "In Stock";
+    QString status = ui->cboStatus_item
+        ? ui->cboStatus_item->currentData().toString()
+        : QString::fromStdString(Domain::statusInStock());
+    if (status.isEmpty()) status = QString::fromStdString(Domain::statusInStock());
     QString id = ui->txtId_item->text().trimmed();
 
     if (ui->chkAutogenerateID_item && ui->chkAutogenerateID_item->isChecked()) {
@@ -870,7 +1030,7 @@ void MainWindow::on_btnAdd_item_clicked()
 
     auto result = BusinessLogic::addItem(m_db, itemDto);
     if (result.isValid) {
-        QMessageBox::information(this, "Add Item", "Item added successfully.");
+        QMessageBox::information(this, Tr::trS("Add Item"), Tr::trS("Item added successfully."));
         LOG_INFO("Item added: " + name);
         m_worklog.logEntry(WorklogEntry::ActionType::Add, WorklogEntry::EntityType::Item,
                           id.toStdString(), "Added item: " + name.toStdString());
@@ -882,7 +1042,7 @@ void MainWindow::on_btnAdd_item_clicked()
         ui->txtShelf_item->clear();
         ui->txtId_item->clear();
     } else {
-        QMessageBox::warning(this, "Add Item", QString::fromStdString(result.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Add Item"), translatedBusinessMessage(result.errorMessage));
     }
 }
 
@@ -902,11 +1062,11 @@ void MainWindow::on_btnCheckId_item_clicked()
 {
     QString id = ui->txtId_item->text().trimmed();
     if (id.isEmpty()) {
-        QMessageBox::information(this, "Check ID", "Enter an ID to check.");
+        QMessageBox::information(this, Tr::trS("Check ID"), Tr::trS("Enter an ID to check."));
         return;
     }
     bool exists = m_db.checkIdExists("items", id.toStdString());
-    QMessageBox::information(this, "Check ID", exists ? "ID already exists." : "ID is available.");
+    QMessageBox::information(this, Tr::trS("Check ID"), exists ? Tr::trS("ID already exists.") : Tr::trS("ID is available."));
 }
 
 void MainWindow::on_txtId_item_textChanged(const QString &text)
@@ -928,7 +1088,8 @@ void MainWindow::on_actionEdit_Items_triggered()
 void MainWindow::on_btnSearch_item_edit_clicked()
 {
     QString term = ui->txtSearch_item_edit->text().trimmed();
-    QString field = ui->cboSearchField_item_edit ? ui->cboSearchField_item_edit->currentText().toLower() : "";
+    QString field = ui->cboSearchField_item_edit
+        ? ui->cboSearchField_item_edit->currentData().toString() : "";
     auto list = BusinessLogic::populateList(m_db, "items", term.toStdString(), field.toStdString());
     auto all = m_db.getAllItems();
     std::unordered_map<std::string, Domain::Item> byId;
@@ -945,18 +1106,37 @@ void MainWindow::on_btnSearch_item_edit_clicked()
 
 void MainWindow::on_lstSearch_item_edit_itemClicked(QListWidgetItem *item)
 {
-    QString id = item->data(Qt::UserRole).toString();
+    loadItemToEdit(item->data(Qt::UserRole).toString());
+}
+
+// Fills the Edit Item form from an item id (shared by the list click
+// handler and the barcode-scanner flow). Optionally selects the row in
+// the search list when the item is present.
+void MainWindow::loadItemToEdit(const QString& id)
+{
     auto itemOpt = m_db.getItemById(id.toStdString());
-    if (itemOpt.has_value()) {
-        ui->txtName_item_edit->setText(QString::fromStdString(itemOpt->name));
-        ui->txtQuantity_item_edit->setText(QString::number(itemOpt->quantity));
-        ui->txtPrice_item_edit->setText(QString::number(itemOpt->price, 'f', 2));
-        ui->txtCategory_item_edit->setText(QString::fromStdString(itemOpt->category));
-        ui->txtShelf_item_edit->setText(QString::fromStdString(itemOpt->shelf));
-        ui->txtId_item_edit->setText(QString::fromStdString(itemOpt->id));
-        if (ui->cboStatus_item_edit) {
-            int idx = ui->cboStatus_item_edit->findText(QString::fromStdString(itemOpt->status));
-            if (idx >= 0) ui->cboStatus_item_edit->setCurrentIndex(idx);
+    if (!itemOpt.has_value()) return;
+    ui->txtName_item_edit->setText(QString::fromStdString(itemOpt->name));
+    ui->txtQuantity_item_edit->setText(QString::number(itemOpt->quantity));
+    ui->txtPrice_item_edit->setText(QString::number(itemOpt->price, 'f', 2));
+    ui->txtCategory_item_edit->setText(QString::fromStdString(itemOpt->category));
+    ui->txtShelf_item_edit->setText(QString::fromStdString(itemOpt->shelf));
+    ui->txtId_item_edit->setText(QString::fromStdString(itemOpt->id));
+    if (ui->cboStatus_item_edit) {
+        int idx = ui->cboStatus_item_edit->findData(QString::fromStdString(itemOpt->status));
+        if (idx < 0) {
+            idx = ui->cboStatus_item_edit->findText(QString::fromStdString(itemOpt->status));
+        }
+        if (idx >= 0) ui->cboStatus_item_edit->setCurrentIndex(idx);
+    }
+    // Highlight the matching row in the results list, if present.
+    if (ui->lstSearch_item_edit) {
+        for (int i = 0; i < ui->lstSearch_item_edit->count(); ++i) {
+            QListWidgetItem* lwi = ui->lstSearch_item_edit->item(i);
+            if (lwi->data(Qt::UserRole).toString() == id) {
+                ui->lstSearch_item_edit->setCurrentRow(i);
+                break;
+            }
         }
     }
 }
@@ -979,18 +1159,21 @@ void MainWindow::on_btnEdit_item_clicked()
     itemDto.price = ui->txtPrice_item_edit->text().trimmed().toDouble();
     itemDto.category = ui->txtCategory_item_edit->text().trimmed().toStdString();
     itemDto.shelf = ui->txtShelf_item_edit->text().trimmed().toStdString();
-    itemDto.status = ui->cboStatus_item_edit ? ui->cboStatus_item_edit->currentText().toStdString() : "In Stock";
+    itemDto.status = ui->cboStatus_item_edit
+        ? ui->cboStatus_item_edit->currentData().toString().toStdString()
+        : Domain::statusInStock();
+    if (itemDto.status.empty()) itemDto.status = Domain::statusInStock();
     itemDto.createdAt = origCreatedAt;
     itemDto.updatedAt = Domain::toISOString(Domain::now());
 
     auto result = BusinessLogic::updateItem(m_db, itemDto);
     if (result.isValid) {
-        QMessageBox::information(this, "Edit Item", "Item updated successfully.");
+        QMessageBox::information(this, Tr::trS("Edit Item"), Tr::trS("Item updated successfully."));
         LOG_INFO("Item updated: " + QString::fromStdString(itemDto.name));
         m_worklog.logEntry(WorklogEntry::ActionType::Edit, WorklogEntry::EntityType::Item,
                           itemDto.id, "Edited item: " + itemDto.name);
     } else {
-        QMessageBox::warning(this, "Edit Item", QString::fromStdString(result.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Edit Item"), translatedBusinessMessage(result.errorMessage));
     }
 }
 
@@ -1042,15 +1225,15 @@ void MainWindow::on_btnRemove_item_clicked()
     QString id = ui->txtId_item_remove->text().trimmed();
     QString name = ui->txtName_item_remove->text().trimmed();
 
-    if (QMessageBox::question(this, "Confirm Remove",
-        "Remove item \"" + name + "\"?") == QMessageBox::Yes) {
+    if (QMessageBox::question(this, Tr::trS("Confirm Remove"),
+        Tr::trS("Remove item \"%1\"?").arg(name)) == QMessageBox::Yes) {
         if (m_db.removeItem(id.toStdString())) {
-            QMessageBox::information(this, "Remove Item", "Item removed successfully.");
+            QMessageBox::information(this, Tr::trS("Remove Item"), Tr::trS("Item removed successfully."));
             LOG_INFO("Item removed: " + name);
             m_worklog.logEntry(WorklogEntry::ActionType::Remove, WorklogEntry::EntityType::Item,
                               id.toStdString(), "Removed item: " + name.toStdString());
         } else {
-            QMessageBox::warning(this, "Remove Item", "Failed to remove item.");
+            QMessageBox::warning(this, Tr::trS("Remove Item"), Tr::trS("Failed to remove item."));
         }
     }
 }
@@ -1470,9 +1653,9 @@ QWidget* MainWindow::buildResupplyPage()
         Domain::Item updated = itemOpt.value();
         updated.quantity = newQty;
         // Auto-update status
-        if (newQty == 0) updated.status = "Out of Stock";
-        else if (newQty <= 5) updated.status = "Low Stock";
-        else updated.status = "In Stock";
+        if (newQty == 0) updated.status = Domain::statusOutOfStock();
+        else if (newQty <= 5) updated.status = Domain::statusLowStock();
+        else updated.status = Domain::statusInStock();
         updated.updatedAt = Domain::now();
 
         if (m_db.updateItem(updated)) {
@@ -1717,7 +1900,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
 {
     QFrame* card = new QFrame();
     card->setFrameShape(QFrame::StyledPanel);
-    card->setMinimumSize(240, 200);
+    card->setMinimumSize(220, 178);
     card->setStyleSheet(
         "QFrame { background: white; border: 2px solid #ddd; border-radius: 10px; margin: 5px; }"
         "QFrame:hover { border-color: #0078d4; }"
@@ -1736,7 +1919,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
     // (fixes white/grey-on-white text on Windows 11).
     QLabel* nameLbl = new QLabel(QString::fromStdString(item.name));
     QFont nameFont = nameLbl->font();
-    nameFont.setPointSize(14);
+    nameFont.setPointSize(13);
     nameFont.setBold(true);
     nameLbl->setFont(nameFont);
     nameLbl->setWordWrap(true);
@@ -1760,7 +1943,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
     // Price
     QLabel* priceLbl = new QLabel(fmtMoney(item.price));
     QFont priceFont = priceLbl->font();
-    priceFont.setPointSize(18);
+    priceFont.setPointSize(16);
     priceFont.setBold(true);
     priceLbl->setFont(priceFont);
     priceLbl->setStyleSheet("color: #2e7d32; background: transparent;");
@@ -1768,11 +1951,11 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
 
     // Quantity & status
     QString statusColor = "#2e7d32";
-    if (item.status == "Low Stock") statusColor = "#f57f17";
-    else if (item.status == "Out of Stock" || item.status == "Sold Out") statusColor = "#c62828";
+    if (Domain::statusIsLowStock(item.status)) statusColor = "#f57f17";
+    else if (Domain::statusIsOutOfStock(item.status)) statusColor = "#c62828";
 
     QLabel* qtyLbl = new QLabel(Tr::trS("Qty: ") + QString::number(item.quantity) +
-                                 "  |  " + Tr::trS(QString::fromStdString(item.status)));
+                                 "  |  " + displayStatusName(item.status));
     qtyLbl->setStyleSheet("color: " + statusColor + "; font-size: 12px; background: transparent;");
     layout->addWidget(qtyLbl);
 
@@ -1790,7 +1973,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
     // Sell button — large touch target
     QPushButton* sellBtn = new QPushButton(Tr::trS("SELL"));
     sellBtn->setObjectName("sellCardBtn");
-    sellBtn->setMinimumHeight(50);
+    sellBtn->setMinimumHeight(44);
     sellBtn->setCursor(Qt::PointingHandCursor);
     sellBtn->setStyleSheet(
         "QPushButton { background-color: #0078d4; color: white; font-size: 16px; "
@@ -1799,7 +1982,7 @@ QWidget* MainWindow::createItemCard(const Domain::Item& item, const QString& key
         "QPushButton:pressed { background-color: #003f7f; }"
         "QPushButton:disabled { background-color: #ccc; color: #666; }"
     );
-    sellBtn->setEnabled(item.quantity > 0 && item.status != "Sold Out");
+    sellBtn->setEnabled(item.quantity > 0 && !Domain::statusIsSoldOut(item.status));
     layout->addWidget(sellBtn);
 
     return card;
@@ -1844,7 +2027,7 @@ bool MainWindow::sellProductAtIndex(int index)
     if (index < 0 || index >= static_cast<int>(m_sellItems.size())) return false;
 
     const auto& item = m_sellItems[index];
-    if (item.quantity <= 0 || item.status == "Sold Out") {
+    if (item.quantity <= 0 || Domain::statusIsSoldOut(item.status)) {
         QMessageBox::information(this, Tr::trS("Sell Item"), Tr::trS("This item is out of stock."));
         return false;
     }
@@ -1862,7 +2045,7 @@ bool MainWindow::sellProductAtIndex(int index)
         return true;
     }
 
-    QMessageBox::warning(this, Tr::trS("Sale Error"), QString::fromStdString(result.errorMessage));
+    QMessageBox::warning(this, Tr::trS("Sale Error"), translatedBusinessMessage(result.errorMessage));
     return false;
 }
 
@@ -1978,10 +2161,10 @@ void MainWindow::undoSaleById(const QString& saleId)
         Domain::Item updated = item.value();
         updated.quantity += sale.quantitySold;
         // Refresh status (keep it consistent with the new quantity)
-        if (updated.quantity > 0 && (updated.status == "Out of Stock" || updated.status == "Sold Out")) {
-            updated.status = updated.quantity <= 5 ? "Low Stock" : "In Stock";
-        } else if (updated.quantity > 10 && updated.status == "Low Stock") {
-            updated.status = "In Stock";
+        if (updated.quantity > 0 && Domain::statusIsOutOfStock(updated.status)) {
+            updated.status = updated.quantity <= 5 ? Domain::statusLowStock() : Domain::statusInStock();
+        } else if (updated.quantity > 10 && Domain::statusIsLowStock(updated.status)) {
+            updated.status = Domain::statusInStock();
         }
         updated.updatedAt = Domain::now();
         m_db.updateItem(updated);
@@ -2054,6 +2237,85 @@ static int sellKeyIndex(int key, const QList<int>& reserved)
 // (they return -1 from sellKeyIndex and fall through to the menus).
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
+    // ── Scanner mode (barcode scanner = keyboard wedge) ─────────────
+    // A USB/HID scanner "types" the code very fast (all characters within
+    // ~50 ms) and terminates with Enter. We detect such bursts on the POS
+    // page and sell the item directly. Plain keys NOT in a burst pass
+    // through untouched, so manual typing/searching and the Alt+keybinds
+    // below are never affected.
+    if (event->type() == QEvent::KeyPress
+        && watched != this
+        && m_scannerEnabled
+        && m_isLoggedIn
+        && !QApplication::activeModalWidget()
+        && ui->stackedWidget) {
+        const int curPage = ui->stackedWidget->currentIndex();
+        const bool scanPage = (curPage == 6)      // POS sell
+                           || (curPage == 2)      // Add Item
+                           || (curPage == 3);     // Edit Item
+        if (scanPage) {
+        auto* k = static_cast<QKeyEvent*>(event);
+        const int key = k->key();
+        const Qt::KeyboardModifiers mods = k->modifiers();
+        const bool alt   = (mods & Qt::AltModifier) != 0;
+        const bool ctrl  = (mods & Qt::ControlModifier) != 0;
+        const bool meta  = (mods & Qt::MetaModifier) != 0;
+        const bool mod   = alt || ctrl || meta;
+
+        // Enter/Return terminator of a scan burst.
+        if ((key == Qt::Key_Return || key == Qt::Key_Enter) && !mod) {
+            if (m_scannerInBurst && !m_scannerBuffer.isEmpty()) {
+                const QString code = m_scannerBuffer;
+                m_scannerInBurst = false;
+                m_scannerBuffer.clear();
+                m_scannerLastNs = 0;
+                handleScannedCode(code);
+                return true;        // consumed: never triggers sell-Enter
+            }
+            // No active burst → keep normal Enter behavior (sell highlight).
+            return QMainWindow::eventFilter(watched, event);
+        }
+
+        // Ignore pure modifier presses (Shift/Ctrl/Alt alone).
+        if (key >= Qt::Key_Shift && key <= Qt::Key_AltGr) {
+            return QMainWindow::eventFilter(watched, event);
+        }
+
+        if (!mod) {
+            const QString text = k->text();
+            if (text.size() == 1 && text.at(0).isPrint()) {
+                const qint64 nowNs = m_scannerKeyTimer.nsecsElapsed();
+                const qint64 gapNs = (m_scannerLastNs > 0) ? (nowNs - m_scannerLastNs)
+                                                           : Q_INT64_C(-1);
+                m_scannerGapNs = gapNs;
+                m_scannerLastNs = nowNs;
+
+                constexpr qint64 kScannerBurstNs = Q_INT64_C(80) * Q_INT64_C(1000) * Q_INT64_C(1000); // 80 ms
+                if (m_scannerInBurst) {
+                    if (gapNs >= 0 && gapNs <= kScannerBurstNs) {
+                        if (m_scannerBuffer.size() < 64) m_scannerBuffer += text;
+                        return true;    // consumed: part of a scanner burst
+                    }
+                    // Gap too large → human typing; abandon the burst.
+                    m_scannerInBurst = false;
+                    m_scannerBuffer.clear();
+                } else if (gapNs >= 0 && gapNs <= kScannerBurstNs && !m_scannerBuffer.isEmpty()) {
+                    // 2nd char right after the 1st (which we did not consume)
+                    // confirms a burst → buffered code is complete.
+                    m_scannerInBurst = true;
+                    if (m_scannerBuffer.size() < 64) m_scannerBuffer += text;
+                    return true;        // consumed from here on
+                } else {
+                    // Candidate first character of a scan. Remember it but
+                    // do NOT consume — a lone fast key must not disappear.
+                    m_scannerBuffer = text;
+                    return QMainWindow::eventFilter(watched, event);
+                }
+            }
+        }
+    }
+    }
+
     if (event->type() == QEvent::KeyPress
         && watched != this
         && m_keybindsEnabled
@@ -2187,12 +2449,12 @@ void MainWindow::on_btnAdd_category_clicked()
     dto.name = name.toStdString();
     auto result = BusinessLogic::addCategory(m_db, dto);
     if (result.isValid) {
-        QMessageBox::information(this, "Category", "Category added.");
+        QMessageBox::information(this, Tr::trS("Category"), Tr::trS("Category added."));
         m_worklog.logEntry(WorklogEntry::ActionType::Add, WorklogEntry::EntityType::Category,
                           id.toStdString(), "Added category: " + name.toStdString());
         on_actionManage_Categories_triggered();
     } else {
-        QMessageBox::warning(this, "Category", QString::fromStdString(result.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Category"), translatedBusinessMessage(result.errorMessage));
     }
 }
 
@@ -2204,12 +2466,12 @@ void MainWindow::on_btnEdit_category_clicked()
     dto.name = ui->txtName_category->text().trimmed().toStdString();
     auto result = BusinessLogic::updateCategory(m_db, dto);
     if (result.isValid) {
-        QMessageBox::information(this, "Category", "Category updated.");
+        QMessageBox::information(this, Tr::trS("Category"), Tr::trS("Category updated."));
         m_worklog.logEntry(WorklogEntry::ActionType::Edit, WorklogEntry::EntityType::Category,
                           dto.id, "Edited category: " + dto.name);
         on_actionManage_Categories_triggered();
     } else {
-        QMessageBox::warning(this, "Category", QString::fromStdString(result.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Category"), translatedBusinessMessage(result.errorMessage));
     }
 }
 
@@ -2217,9 +2479,9 @@ void MainWindow::on_btnRemove_category_clicked()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
     QString id = ui->txtId_category->text().trimmed();
-    if (QMessageBox::question(this, "Confirm", "Remove this category?") == QMessageBox::Yes) {
+    if (QMessageBox::question(this, Tr::trS("Confirm"), Tr::trS("Remove this category?")) == QMessageBox::Yes) {
         if (m_db.removeCategory(id.toStdString())) {
-            QMessageBox::information(this, "Category", "Category removed.");
+            QMessageBox::information(this, Tr::trS("Category"), Tr::trS("Category removed."));
             m_worklog.logEntry(WorklogEntry::ActionType::Remove, WorklogEntry::EntityType::Category,
                               id.toStdString(), "Removed category");
             on_actionManage_Categories_triggered();
@@ -2267,12 +2529,12 @@ void MainWindow::on_btnAdd_shelf_clicked()
     dto.name = name.toStdString();
     auto result = BusinessLogic::addShelf(m_db, dto);
     if (result.isValid) {
-        QMessageBox::information(this, "Shelf", "Shelf added.");
+        QMessageBox::information(this, Tr::trS("Shelf"), Tr::trS("Shelf added."));
         m_worklog.logEntry(WorklogEntry::ActionType::Add, WorklogEntry::EntityType::Shelf,
                           id.toStdString(), "Added shelf: " + name.toStdString());
         on_actionManage_Shelves_triggered();
     } else {
-        QMessageBox::warning(this, "Shelf", QString::fromStdString(result.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Shelf"), translatedBusinessMessage(result.errorMessage));
     }
 }
 
@@ -2284,12 +2546,12 @@ void MainWindow::on_btnEdit_shelf_clicked()
     dto.name = ui->txtName_shelf->text().trimmed().toStdString();
     auto result = BusinessLogic::updateShelf(m_db, dto);
     if (result.isValid) {
-        QMessageBox::information(this, "Shelf", "Shelf updated.");
+        QMessageBox::information(this, Tr::trS("Shelf"), Tr::trS("Shelf updated."));
         m_worklog.logEntry(WorklogEntry::ActionType::Edit, WorklogEntry::EntityType::Shelf,
                           dto.id, "Edited shelf: " + dto.name);
         on_actionManage_Shelves_triggered();
     } else {
-        QMessageBox::warning(this, "Shelf", QString::fromStdString(result.errorMessage));
+        QMessageBox::warning(this, Tr::trS("Shelf"), translatedBusinessMessage(result.errorMessage));
     }
 }
 
@@ -2297,9 +2559,9 @@ void MainWindow::on_btnRemove_shelf_clicked()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
     QString id = ui->txtId_shelf->text().trimmed();
-    if (QMessageBox::question(this, "Confirm", "Remove this shelf?") == QMessageBox::Yes) {
+    if (QMessageBox::question(this, Tr::trS("Confirm"), Tr::trS("Remove this shelf?")) == QMessageBox::Yes) {
         if (m_db.removeShelf(id.toStdString())) {
-            QMessageBox::information(this, "Shelf", "Shelf removed.");
+            QMessageBox::information(this, Tr::trS("Shelf"), Tr::trS("Shelf removed."));
             m_worklog.logEntry(WorklogEntry::ActionType::Remove, WorklogEntry::EntityType::Shelf,
                               id.toStdString(), "Removed shelf");
             on_actionManage_Shelves_triggered();
@@ -2377,7 +2639,7 @@ void MainWindow::on_chkSimpleView_sales_toggled(bool)
 
 void MainWindow::on_btnExport_sales_clicked()
 {
-    QString fileName = QFileDialog::getSaveFileName(this, "Export Sales", "sales_export.csv", "CSV Files (*.csv)");
+    QString fileName = QFileDialog::getSaveFileName(this, Tr::trS("Export Sales"), "sales_export.csv", Tr::trS("CSV Files (*.csv)"));
     if (fileName.isEmpty()) return;
 
     QFile file(fileName);
@@ -2397,7 +2659,7 @@ void MainWindow::on_btnExport_sales_clicked()
             << QString::fromStdString(Domain::toISOString(s.saleDate)) << "\n";
     }
     file.close();
-    QMessageBox::information(this, "Export", "Sales exported to " + fileName);
+    QMessageBox::information(this, Tr::trS("Export"), Tr::trS("Sales exported to %1").arg(fileName));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2488,14 +2750,14 @@ void MainWindow::on_btnGenerateReport_clicked()
 void MainWindow::on_btnExportReport_clicked()
 {
     if (ui->txtReport) {
-        QString fileName = QFileDialog::getSaveFileName(this, "Export Report", "report.txt", "Text Files (*.txt)");
+        QString fileName = QFileDialog::getSaveFileName(this, Tr::trS("Export Report"), "report.txt", Tr::trS("Text Files (*.txt)"));
         if (!fileName.isEmpty()) {
             QFile file(fileName);
             if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
                 QTextStream out(&file);
                 out << ui->txtReport->toPlainText();
                 file.close();
-                QMessageBox::information(this, "Export", "Report saved.");
+                QMessageBox::information(this, Tr::trS("Export"), Tr::trS("Report saved."));
             }
         }
     }
@@ -2526,7 +2788,7 @@ void MainWindow::on_btnExportPdfReport_clicked()
         QMessageBox::information(this, Tr::trS("Export PDF"), Tr::trS("PDF report saved."));
     } else {
         QMessageBox::warning(this, Tr::trS("Export PDF"),
-                             Tr::trS("Could not save the PDF report.") + " (" + err + ")");
+                             Tr::trS("Could not save the PDF report.") + " (" + Tr::trS(err) + ")");
     }
 }
 
@@ -2553,7 +2815,7 @@ void MainWindow::on_actionCreate_Database_triggered()
 
 void MainWindow::on_btnBrowseItemsDb_clicked()
 {
-    QString file = QFileDialog::getSaveFileName(this, "Select Items Database", "items.db", "SQLite DB (*.db)");
+    QString file = QFileDialog::getSaveFileName(this, Tr::trS("Select Items Database"), "items.db", Tr::trS("SQLite DB (*.db)"));
     if (!file.isEmpty() && ui->txtItemsDbPath) {
         ui->txtItemsDbPath->setText(file);
     }
@@ -2561,7 +2823,7 @@ void MainWindow::on_btnBrowseItemsDb_clicked()
 
 void MainWindow::on_btnBrowseUsersDb_clicked()
 {
-    QString file = QFileDialog::getSaveFileName(this, "Select Users Database", "users.db", "SQLite DB (*.db)");
+    QString file = QFileDialog::getSaveFileName(this, Tr::trS("Select Users Database"), "users.db", Tr::trS("SQLite DB (*.db)"));
     if (!file.isEmpty() && ui->txtUsersDbPath) {
         ui->txtUsersDbPath->setText(file);
     }
@@ -2573,16 +2835,16 @@ void MainWindow::on_btnLoadDbConfig_clicked()
     QString usersDb = ui->txtUsersDbPath ? ui->txtUsersDbPath->text() : "";
 
     if (itemsDb.isEmpty() || usersDb.isEmpty()) {
-        QMessageBox::warning(this, "Database", "Please select both database files.");
+        QMessageBox::warning(this, Tr::trS("Database"), Tr::trS("Please select both database files."));
         return;
     }
 
     BusinessLogic::shutdownDatabases(m_db);
     if (BusinessLogic::initializeDatabases(m_db, itemsDb.toStdString(), usersDb.toStdString())) {
-        QMessageBox::information(this, "Database", "Connected to databases successfully.");
+        QMessageBox::information(this, Tr::trS("Database"), Tr::trS("Connected to databases successfully."));
         LOG_INFO("Databases loaded: " + itemsDb + ", " + usersDb);
     } else {
-        QMessageBox::warning(this, "Database", "Failed to connect to databases.");
+        QMessageBox::warning(this, Tr::trS("Database"), Tr::trS("Failed to connect to databases."));
     }
 }
 
@@ -2591,15 +2853,15 @@ void MainWindow::on_btnSaveAsDefault_clicked()
     QSettings settings("QMark", "SchoolShop");
     settings.setValue("db/itemsPath", ui->txtItemsDbPath ? ui->txtItemsDbPath->text() : "");
     settings.setValue("db/usersPath", ui->txtUsersDbPath ? ui->txtUsersDbPath->text() : "");
-    QMessageBox::information(this, "Settings", "Default database configuration saved.");
+    QMessageBox::information(this, Tr::trS("Settings"), Tr::trS("Default database configuration saved."));
 }
 
 void MainWindow::on_btnTestConnection_clicked()
 {
     if (m_db.isConnected()) {
-        QMessageBox::information(this, "Test", "Database connection is active.");
+        QMessageBox::information(this, Tr::trS("Test"), Tr::trS("Database connection is active."));
     } else {
-        QMessageBox::warning(this, "Test", "No database connection.");
+        QMessageBox::warning(this, Tr::trS("Test"), Tr::trS("No database connection."));
     }
 }
 
@@ -2610,9 +2872,9 @@ void MainWindow::on_btnCreateNewDb_clicked()
 
     BusinessLogic::shutdownDatabases(m_db);
     if (BusinessLogic::initializeDatabases(m_db, itemsDb.toStdString(), usersDb.toStdString())) {
-        QMessageBox::information(this, "Create DB", "New databases created and connected.");
+        QMessageBox::information(this, Tr::trS("Create DB"), Tr::trS("New databases created and connected."));
     } else {
-        QMessageBox::warning(this, "Create DB", "Failed to create databases.");
+        QMessageBox::warning(this, Tr::trS("Create DB"), Tr::trS("Failed to create databases."));
     }
 }
 
@@ -2672,7 +2934,7 @@ void MainWindow::on_btnChangeRole_clicked()
     // Simple role change via combo or dialog
     QStringList roles = {"Clerk", "Admin", "SuperAdmin"};
     bool ok;
-    QString newRole = QInputDialog::getItem(this, "Change Role", "Select new role:", roles, 0, false, &ok);
+    QString newRole = QInputDialog::getItem(this, Tr::trS("Change Role"), Tr::trS("Select new role:"), roles, 0, false, &ok);
     if (ok && !newRole.isEmpty()) {
         // Find user and update
         auto users = m_db.getAllUsers();
@@ -2682,7 +2944,7 @@ void MainWindow::on_btnChangeRole_clicked()
                 else if (newRole == "Admin") u.role = Domain::User::Role::Admin;
                 else u.role = Domain::User::Role::UserRole;
                 m_db.updateUser(u);
-                QMessageBox::information(this, "Account", "Role changed.");
+                QMessageBox::information(this, Tr::trS("Account"), Tr::trS("Role changed."));
                 on_actionAccounts_triggered();
                 break;
             }
@@ -2697,7 +2959,7 @@ void MainWindow::on_btnChangePassword_clicked()
     if (!selected) return;
 
     bool ok;
-    QString newPwd = QInputDialog::getText(this, "Change Password", "New password:", QLineEdit::Password, "", &ok);
+    QString newPwd = QInputDialog::getText(this, Tr::trS("Change Password"), Tr::trS("New password:"), QLineEdit::Password, "", &ok);
     if (ok && !newPwd.isEmpty()) {
         QString userId = selected->data(Qt::UserRole).toString();
         auto users = m_db.getAllUsers();
@@ -2706,12 +2968,12 @@ void MainWindow::on_btnChangePassword_clicked()
                 // Never store plaintext passwords — hash before saving
                 std::string hashedPw = hash_string(newPwd.toStdString());
                 if (hashedPw.empty()) {
-                    QMessageBox::warning(this, "Change Password", "Failed to hash password.");
+                    QMessageBox::warning(this, Tr::trS("Change Password"), Tr::trS("Failed to hash password."));
                     return;
                 }
                 u.passwordHash = hashedPw;
                 m_db.updateUser(u);
-                QMessageBox::information(this, "Account", "Password changed.");
+                QMessageBox::information(this, Tr::trS("Account"), Tr::trS("Password changed."));
                 break;
             }
         }
@@ -2722,7 +2984,7 @@ void MainWindow::on_btnDeleteAccount_clicked()
 {
     if (!checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) return;
     // Users cannot be deleted in current implementation — just a placeholder
-    QMessageBox::information(this, "Account", "Account deletion not yet implemented.");
+    QMessageBox::information(this, Tr::trS("Account"), Tr::trS("Account deletion not yet implemented."));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2907,7 +3169,7 @@ void MainWindow::on_btnRefreshWorklog_clicked()
 
 void MainWindow::on_btnExportWorklog_clicked()
 {
-    QString fileName = QFileDialog::getSaveFileName(this, "Export Worklog", "worklog_export.txt", "Text Files (*.txt)");
+    QString fileName = QFileDialog::getSaveFileName(this, Tr::trS("Export Worklog"), "worklog_export.txt", Tr::trS("Text Files (*.txt)"));
     if (fileName.isEmpty()) return;
 
     QFile file(fileName);
@@ -2977,4 +3239,935 @@ void MainWindow::on_btnExportDiagnostics_clicked()
     out << Tr::trS("Language: ") << Tr::language() << "\n";
     file.close();
     QMessageBox::information(this, Tr::trS("Export Diagnostics"), Tr::trS("Diagnostics exported."));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Automation & Remote (scanner / e-mail / backups / auto-update /
+// remote dashboard). All network + disk work runs on worker threads;
+// GUI updates are marshalled back through QMetaObject::invokeMethod
+// with a QPointer guard so a closing window can never crash us.
+// ═══════════════════════════════════════════════════════════════════
+
+// Show a transient status-bar message (and always log it).
+void MainWindow::showStatus(const QString& msg, int ms)
+{
+    if (statusBar()) statusBar()->showMessage(msg, ms > 0 ? ms : 7000);
+    AppLogger::instance().log("AUTO", msg);
+}
+
+void MainWindow::on_actionAutomation_triggered()
+{
+    if (!checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) return;
+    applyAutomationPageSettings();
+    if (m_automationPage) goToPage(ui->stackedWidget->indexOf(m_automationPage));
+}
+
+void MainWindow::onAutomationSaveClicked()
+{
+    saveAutomationPageSettings();
+}
+
+// ── Automation page builder ─────────────────────────────────────
+QWidget* MainWindow::buildAutomationPage()
+{
+    QWidget* page = new QWidget();
+    page->setObjectName("automationPage");
+    QVBoxLayout* mainLayout = new QVBoxLayout(page);
+    mainLayout->setSpacing(0);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+
+    // ── Top bar ──
+    QFrame* topBar = new QFrame();
+    topBar->setMaximumHeight(60);
+    topBar->setStyleSheet("background: #0078d4;");
+    QHBoxLayout* topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(15, 0, 15, 0);
+
+    QPushButton* btnBack = new QPushButton(Tr::trS("← Back"));
+    btnBack->setStyleSheet(
+        "QPushButton { color: white; background: transparent; border: none; "
+        "font-size: 14px; font-weight: bold; padding: 5px 10px; }"
+        "QPushButton:hover { background: rgba(255,255,255,0.15); border-radius: 4px; }");
+    btnBack->setCursor(Qt::PointingHandCursor);
+    btnBack->setMinimumHeight(36);
+    topLayout->addWidget(btnBack);
+
+    QLabel* title = new QLabel(Tr::trS("Automation & Remote"));
+    title->setStyleSheet("color: white; font-size: 16px; font-weight: bold;");
+    topLayout->addWidget(title);
+    topLayout->addStretch();
+    mainLayout->addWidget(topBar);
+
+    connect(btnBack, &QPushButton::clicked, this, [this]() {
+        goToPage(1); // dashboard
+    });
+
+    // ── Scrollable content ──
+    QScrollArea* scroll = new QScrollArea();
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    QWidget* body = new QWidget();
+    QVBoxLayout* bodyLayout = new QVBoxLayout(body);
+    bodyLayout->setContentsMargins(15, 15, 15, 15);
+    bodyLayout->setSpacing(14);
+
+    auto section = [](const QString& titleText) {
+        QGroupBox* g = new QGroupBox(titleText);
+        g->setStyleSheet(
+            "QGroupBox { border: 1px solid #ccc; border-radius: 10px; margin-top: 12px; padding-top: 8px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; font-weight: bold; }");
+        return g;
+    };
+    auto hint = [](const QString& text) {
+        QLabel* l = new QLabel(text);
+        l->setWordWrap(true);
+        l->setStyleSheet("color: #666; background: transparent; font-size: 12px;");
+        return l;
+    };
+
+    // ── 1. Scanner mode ──
+    {
+        QGroupBox* g = section(Tr::trS("Scanner mode"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+        m_autoUi.chkScanner = new QCheckBox(Tr::trS("Enable barcode scanner mode (keyboard input)"));
+        v->addWidget(m_autoUi.chkScanner);
+        v->addWidget(hint(Tr::trS("Scans are read from any USB/HID barcode scanner quickly and sold automatically (POS page).")));
+        bodyLayout->addWidget(g);
+
+        connect(m_autoUi.chkScanner, &QCheckBox::toggled, this, [this](bool on) {
+            setScannerMode(on);
+            showStatus(Tr::trS(on ? "Scanner mode enabled." : "Scanner mode disabled."), 3000);
+        });
+    }
+
+    // ── 2. Remote dashboard ──
+    {
+        QGroupBox* g = section(Tr::trS("Remote dashboard"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+
+        m_autoUi.chkRemote = new QCheckBox(Tr::trS("Enable remote dashboard for SuperAdmin"));
+        v->addWidget(m_autoUi.chkRemote);
+        v->addWidget(hint(Tr::trS("A read-only dashboard + JSON API on the local network for remote SuperAdmin access.")));
+
+        QGridLayout* grid = new QGridLayout();
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(6);
+        grid->addWidget(new QLabel(Tr::trS("Port")), 0, 0);
+        m_autoUi.spinRemotePort = new QSpinBox();
+        m_autoUi.spinRemotePort->setRange(1, 65535);
+        m_autoUi.spinRemotePort->setValue(8080);
+        grid->addWidget(m_autoUi.spinRemotePort, 0, 1);
+
+        grid->addWidget(new QLabel(Tr::trS("Access token (long & random)")), 1, 0);
+        m_autoUi.txtRemoteToken = new QLineEdit();
+        m_autoUi.txtRemoteToken->setPlaceholderText(Tr::trS("Access token (long & random)"));
+        grid->addWidget(m_autoUi.txtRemoteToken, 1, 1);
+
+        QPushButton* btnToken = new QPushButton(Tr::trS("Generate token"));
+        grid->addWidget(btnToken, 1, 2);
+        v->addLayout(grid);
+
+        m_autoUi.lblRemoteStatus = new QLabel();
+        m_autoUi.lblRemoteStatus->setWordWrap(true);
+        m_autoUi.lblRemoteStatus->setStyleSheet("color: #2e7d32; font-weight: bold; background: transparent;");
+        v->addWidget(m_autoUi.lblRemoteStatus);
+        v->addWidget(hint(Tr::trS("Security warning: the token is the only gate — keep it secret.")));
+        bodyLayout->addWidget(g);
+
+        connect(btnToken, &QPushButton::clicked, this, [this]() {
+            QString token;
+            for (int i = 0; i < 6; ++i)
+                token += QString::number(QRandomGenerator::system()->generate(), 16);
+            m_autoUi.txtRemoteToken->setText(token);
+            AppSettings::settings().setValue(AppSettings::keyRemoteToken(), token);
+            // If the dashboard is already up, restart it so the new token
+            // takes effect immediately (the running server still holds the
+            // old one until it is rebuilt).
+            if (m_remoteServer) {
+                stopRemoteServer();
+                startRemoteServerIfEnabled();
+            }
+            showStatus(Tr::trS("Access token (long & random)") + " ✓", 3000);
+        });
+        connect(m_autoUi.chkRemote, &QCheckBox::toggled, this, [this](bool) {
+            saveAutomationPageSettings();
+        });
+    }
+
+    // ── 3. E-mail summary ──
+    {
+        QGroupBox* g = section(Tr::trS("E-mail summary"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+
+        m_autoUi.chkMail = new QCheckBox(Tr::trS("Enable scheduled e-mail summaries"));
+        v->addWidget(m_autoUi.chkMail);
+
+        QGridLayout* grid = new QGridLayout();
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(6);
+        grid->addWidget(new QLabel(Tr::trS("SMTP host")), 0, 0);
+        m_autoUi.txtMailHost = new QLineEdit();
+        grid->addWidget(m_autoUi.txtMailHost, 0, 1);
+        grid->addWidget(new QLabel(Tr::trS("SMTP port")), 0, 2);
+        m_autoUi.spinMailPort = new QSpinBox();
+        m_autoUi.spinMailPort->setRange(1, 65535);
+        m_autoUi.spinMailPort->setValue(587);
+        grid->addWidget(m_autoUi.spinMailPort, 0, 3);
+
+        grid->addWidget(new QLabel(Tr::trS("Security")), 1, 0);
+        m_autoUi.cboMailSecurity = new QComboBox();
+        m_autoUi.cboMailSecurity->addItems({ "STARTTLS (587)", "Implicit TLS (465)", "Plaintext (25)" });
+        grid->addWidget(m_autoUi.cboMailSecurity, 1, 1);
+        grid->addWidget(new QLabel(Tr::trS("Sender address")), 1, 2);
+        m_autoUi.txtMailFrom = new QLineEdit();
+        grid->addWidget(m_autoUi.txtMailFrom, 1, 3);
+
+        grid->addWidget(new QLabel(Tr::trS("Username")), 2, 0);
+        m_autoUi.txtMailUser = new QLineEdit();
+        grid->addWidget(m_autoUi.txtMailUser, 2, 1);
+        grid->addWidget(new QLabel(Tr::trS("Password")), 2, 2);
+        m_autoUi.txtMailPass = new QLineEdit();
+        m_autoUi.txtMailPass->setEchoMode(QLineEdit::Password);
+        grid->addWidget(m_autoUi.txtMailPass, 2, 3);
+        v->addLayout(grid);
+
+        v->addWidget(new QLabel(Tr::trS("Recipients (one per line)")));
+        m_autoUi.txtMailRecipients = new QPlainTextEdit();
+        m_autoUi.txtMailRecipients->setMaximumHeight(70);
+        m_autoUi.txtMailRecipients->setPlaceholderText(
+            "admin@example.com\nmanager@example.com");
+        v->addWidget(m_autoUi.txtMailRecipients);
+
+        QGridLayout* sched = new QGridLayout();
+        m_autoUi.chkMailDaily = new QCheckBox(Tr::trS("Send daily summary"));
+        m_autoUi.timeMailDaily = new QTimeEdit();
+        m_autoUi.timeMailDaily->setDisplayFormat("HH:mm");
+        sched->addWidget(m_autoUi.chkMailDaily, 0, 0);
+        sched->addWidget(m_autoUi.timeMailDaily, 0, 1);
+
+        m_autoUi.chkMailMonthly = new QCheckBox(Tr::trS("Send monthly summary"));
+        m_autoUi.spinMailMonthlyDay = new QSpinBox();
+        m_autoUi.spinMailMonthlyDay->setRange(1, 28);
+        m_autoUi.spinMailMonthlyDay->setValue(1);
+        m_autoUi.timeMailMonthly = new QTimeEdit();
+        m_autoUi.timeMailMonthly->setDisplayFormat("HH:mm");
+        QHBoxLayout* monthlyRow = new QHBoxLayout();
+        monthlyRow->addWidget(m_autoUi.chkMailMonthly);
+        monthlyRow->addWidget(new QLabel(Tr::trS("Day of month")));
+        monthlyRow->addWidget(m_autoUi.spinMailMonthlyDay);
+        monthlyRow->addWidget(m_autoUi.timeMailMonthly);
+        monthlyRow->addStretch();
+        sched->addLayout(monthlyRow, 1, 0, 1, 2);
+        v->addLayout(sched);
+
+        m_autoUi.chkMailAttach = new QCheckBox(Tr::trS("Attach database backup to each summary"));
+        v->addWidget(m_autoUi.chkMailAttach);
+
+        m_autoUi.lblMailStatus = new QLabel();
+        m_autoUi.lblMailStatus->setWordWrap(true);
+        m_autoUi.lblMailStatus->setStyleSheet("color: #2e7d32; background: transparent;");
+        v->addWidget(m_autoUi.lblMailStatus);
+
+        QPushButton* btnTest = new QPushButton(Tr::trS("Send test e-mail"));
+        v->addWidget(btnTest);
+        bodyLayout->addWidget(g);
+
+        connect(btnTest, &QPushButton::clicked, this, [this]() {
+            saveAutomationPageSettings();
+            sendSummaryEmailNow(false);
+        });
+    }
+
+    // ── 4. Backups ──
+    {
+        QGroupBox* g = section(Tr::trS("Backups"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+
+        QGridLayout* grid = new QGridLayout();
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(6);
+        grid->addWidget(new QLabel(Tr::trS("Backup folder")), 0, 0);
+        m_autoUi.txtBackupFolder = new QLineEdit();
+        grid->addWidget(m_autoUi.txtBackupFolder, 0, 1);
+        grid->addWidget(new QLabel(Tr::trS("Keep last N backups")), 0, 2);
+        m_autoUi.spinBackupKeep = new QSpinBox();
+        m_autoUi.spinBackupKeep->setRange(1, 100);
+        m_autoUi.spinBackupKeep->setValue(10);
+        grid->addWidget(m_autoUi.spinBackupKeep, 0, 3);
+        v->addLayout(grid);
+
+        QHBoxLayout* sched = new QHBoxLayout();
+        m_autoUi.chkBackupSchedule = new QCheckBox(Tr::trS("Scheduled backup"));
+        m_autoUi.timeBackupSchedule = new QTimeEdit();
+        m_autoUi.timeBackupSchedule->setDisplayFormat("HH:mm");
+        sched->addWidget(m_autoUi.chkBackupSchedule);
+        sched->addWidget(new QLabel(Tr::trS("Time of day")));
+        sched->addWidget(m_autoUi.timeBackupSchedule);
+        sched->addStretch();
+        v->addLayout(sched);
+
+        m_autoUi.chkBackupOnlineMail = new QCheckBox(Tr::trS("Send a copy online via e-mail"));
+        v->addWidget(m_autoUi.chkBackupOnlineMail);
+        m_autoUi.chkBackupOnlineHttp = new QCheckBox(Tr::trS("Upload a copy to a custom server (HTTP PUT)"));
+        v->addWidget(m_autoUi.chkBackupOnlineHttp);
+
+        QGridLayout* httpGrid = new QGridLayout();
+        httpGrid->setHorizontalSpacing(8);
+        httpGrid->setVerticalSpacing(6);
+        httpGrid->addWidget(new QLabel(Tr::trS("Server URL (or {filename} template)")), 0, 0);
+        m_autoUi.txtBackupHttpUrl = new QLineEdit();
+        httpGrid->addWidget(m_autoUi.txtBackupHttpUrl, 0, 1);
+        httpGrid->addWidget(new QLabel(Tr::trS("Bearer token (optional)")), 1, 0);
+        m_autoUi.txtBackupHttpToken = new QLineEdit();
+        m_autoUi.txtBackupHttpToken->setEchoMode(QLineEdit::Password);
+        httpGrid->addWidget(m_autoUi.txtBackupHttpToken, 1, 1);
+        v->addLayout(httpGrid);
+
+        m_autoUi.lblBackupStatus = new QLabel();
+        m_autoUi.lblBackupStatus->setWordWrap(true);
+        m_autoUi.lblBackupStatus->setStyleSheet("color: #2e7d32; background: transparent;");
+        v->addWidget(m_autoUi.lblBackupStatus);
+
+        QPushButton* btnBackup = new QPushButton(Tr::trS("Back up now"));
+        v->addWidget(btnBackup);
+        bodyLayout->addWidget(g);
+
+        connect(btnBackup, &QPushButton::clicked, this, [this]() {
+            saveAutomationPageSettings();
+            createBackupNow();
+        });
+    }
+
+    // ── 5. Auto-update ──
+    {
+        QGroupBox* g = section(Tr::trS("Auto-update"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+
+        m_autoUi.chkUpdates = new QCheckBox(Tr::trS("Enable automatic update checks from GitHub"));
+        v->addWidget(m_autoUi.chkUpdates);
+        m_autoUi.lblUpdateStatus = new QLabel();
+        m_autoUi.lblUpdateStatus->setWordWrap(true);
+        m_autoUi.lblUpdateStatus->setStyleSheet("color: #2e7d32; background: transparent;");
+        v->addWidget(m_autoUi.lblUpdateStatus);
+
+        QPushButton* btnCheck = new QPushButton(Tr::trS("Check for updates now"));
+        v->addWidget(btnCheck);
+        bodyLayout->addWidget(g);
+
+        connect(btnCheck, &QPushButton::clicked, this, [this]() {
+            checkUpdatesNow();
+        });
+    }
+
+    // ── Save button ──
+    QPushButton* btnSave = new QPushButton(Tr::trS("Save Automation Settings"));
+    btnSave->setObjectName("btnAutomation_pref");
+    btnSave->setMinimumHeight(44);
+    btnSave->setStyleSheet(
+        "QPushButton { background-color: #0078d4; color: white; border: none; border-radius: 8px; "
+        "font-size: 14px; font-weight: bold; padding: 8px 20px; }"
+        "QPushButton:hover { background-color: #005a9e; }");
+    btnSave->setCursor(Qt::PointingHandCursor);
+    bodyLayout->addWidget(btnSave);
+    connect(btnSave, &QPushButton::clicked, this, &MainWindow::onAutomationSaveClicked);
+
+    scroll->setWidget(body);
+    mainLayout->addWidget(scroll);
+
+    // Register into the stack (page index is dynamic, like resupply).
+    if (ui->stackedWidget) ui->stackedWidget->addWidget(page);
+    applyAutomationPageSettings();
+    return page;
+}
+
+// ── Automation settings: page → members → widget values ──────────
+void MainWindow::applyAutomationPageSettings()
+{
+    // Populating the checkboxes emits toggled(), whose handlers persist the
+    // (still half-filled) UI back to settings. Guard against that re-entrancy
+    // so an existing configuration is never overwritten with defaults.
+    m_applyingAutomationSettings = true;
+    struct Guard {
+        bool* flag;
+        ~Guard() { *flag = false; }
+    } guard{&m_applyingAutomationSettings};
+
+    // Scanner
+    if (m_autoUi.chkScanner) {
+        m_autoUi.chkScanner->setChecked(AppSettings::scanEnabled());
+        m_scannerEnabled = AppSettings::scanEnabled();
+    }
+    // Remote
+    if (m_autoUi.chkRemote) {
+        m_autoUi.chkRemote->setChecked(AppSettings::remoteEnabled());
+        m_autoUi.spinRemotePort->setValue(AppSettings::remotePort());
+        m_autoUi.txtRemoteToken->setText(AppSettings::remoteToken());
+        if (m_autoUi.lblRemoteStatus) {
+            if (m_remoteServer && m_remoteServer->isRunning())
+                m_autoUi.lblRemoteStatus->setText(
+                    Tr::trS("Running on port %1").arg(m_remoteServer->effectivePort()));
+            else if (AppSettings::remoteEnabled() && !AppSettings::remoteToken().isEmpty())
+                m_autoUi.lblRemoteStatus->setText(Tr::trS("Dashboard stopped."));
+            else
+                m_autoUi.lblRemoteStatus->setText(Tr::trS("Dashboard stopped."));
+        }
+    }
+    // E-mail
+    if (m_autoUi.chkMail) {
+        m_autoUi.chkMail->setChecked(AppSettings::mailEnabled());
+        m_autoUi.txtMailHost->setText(AppSettings::mailHost());
+        m_autoUi.spinMailPort->setValue(AppSettings::mailPort());
+        m_autoUi.cboMailSecurity->setCurrentIndex(qBound(0, AppSettings::mailSecurity(), 2));
+        m_autoUi.txtMailUser->setText(AppSettings::mailUsername());
+        m_autoUi.txtMailPass->setText(AppSettings::mailPassword());
+        m_autoUi.txtMailFrom->setText(AppSettings::mailFrom());
+        m_autoUi.txtMailRecipients->setPlainText(AppSettings::mailRecipients().join("\n"));
+        m_autoUi.chkMailDaily->setChecked(AppSettings::mailDailyEnabled());
+        m_autoUi.timeMailDaily->setTime(QTime::fromString(AppSettings::mailDailyTime(), "HH:mm"));
+        m_autoUi.chkMailMonthly->setChecked(AppSettings::mailMonthlyEnabled());
+        m_autoUi.spinMailMonthlyDay->setValue(AppSettings::mailMonthlyDay());
+        m_autoUi.timeMailMonthly->setTime(QTime::fromString(AppSettings::mailMonthlyTime(), "HH:mm"));
+        m_autoUi.chkMailAttach->setChecked(AppSettings::mailAttachBackup());
+        if (m_autoUi.lblMailStatus) {
+            const QString lastMail = !AppSettings::mailDailyLast().isEmpty()
+                ? AppSettings::mailDailyLast() : AppSettings::mailMonthlyLast();
+            m_autoUi.lblMailStatus->setText(lastMail.isEmpty()
+                ? Tr::trS("Last e-mail: none yet")
+                : Tr::trS("Last e-mail: %1").arg(lastMail));
+        }
+    }
+    // Backups
+    if (m_autoUi.txtBackupFolder) {
+        m_autoUi.txtBackupFolder->setText(AppSettings::backupFolder());
+        m_autoUi.spinBackupKeep->setValue(AppSettings::backupKeep());
+        m_autoUi.chkBackupSchedule->setChecked(AppSettings::backupScheduleEnabled());
+        m_autoUi.timeBackupSchedule->setTime(QTime::fromString(AppSettings::backupScheduleTime(), "HH:mm"));
+        m_autoUi.chkBackupOnlineMail->setChecked(AppSettings::backupOnlineMail());
+        m_autoUi.chkBackupOnlineHttp->setChecked(AppSettings::backupOnlineHttp());
+        m_autoUi.txtBackupHttpUrl->setText(AppSettings::backupHttpUrl());
+        m_autoUi.txtBackupHttpToken->setText(AppSettings::backupHttpToken());
+        if (m_autoUi.lblBackupStatus) {
+            const QString last = AppSettings::backupLastAt();
+            m_autoUi.lblBackupStatus->setText(last.isEmpty()
+                ? Tr::trS("Last backup: none yet")
+                : Tr::trS("Last backup: %1").arg(last));
+        }
+    }
+    // Auto-update
+    if (m_autoUi.chkUpdates) {
+        m_autoUi.chkUpdates->setChecked(AppSettings::updateEnabled());
+        if (m_autoUi.lblUpdateStatus) {
+            const QString seen = AppSettings::updateLastSeen();
+            m_autoUi.lblUpdateStatus->setText(seen.isEmpty()
+                ? Tr::trS("Update check: up to date.")
+                : Tr::trS("Update available: %1").arg(seen));
+        }
+    }
+}
+
+// Persist the widget values, apply live state, restart the dashboard.
+void MainWindow::saveAutomationPageSettings()
+{
+    // Ignore saves triggered while the page is still being populated.
+    if (m_applyingAutomationSettings) return;
+
+    // Scanner
+    m_scannerEnabled = m_autoUi.chkScanner ? m_autoUi.chkScanner->isChecked()
+                                           : AppSettings::scanEnabled();
+    setScannerMode(m_scannerEnabled);
+    // Remote
+    if (m_autoUi.chkRemote) {
+        AppSettings::settings().setValue(AppSettings::keyRemoteEnabled(), m_autoUi.chkRemote->isChecked());
+        AppSettings::settings().setValue(AppSettings::keyRemotePort(), m_autoUi.spinRemotePort->value());
+        AppSettings::settings().setValue(AppSettings::keyRemoteToken(),
+                                         m_autoUi.txtRemoteToken->text().trimmed());
+    }
+    // E-mail
+    if (m_autoUi.chkMail) {
+        AppSettings::settings().setValue(AppSettings::keyMailEnabled(), m_autoUi.chkMail->isChecked());
+        AppSettings::settings().setValue(AppSettings::keyMailHost(), m_autoUi.txtMailHost->text().trimmed());
+        AppSettings::settings().setValue(AppSettings::keyMailPort(), m_autoUi.spinMailPort->value());
+        AppSettings::settings().setValue(AppSettings::keyMailSecurity(), m_autoUi.cboMailSecurity->currentIndex());
+        AppSettings::settings().setValue(AppSettings::keyMailUsername(), m_autoUi.txtMailUser->text().trimmed());
+        AppSettings::settings().setValue(AppSettings::keyMailPassword(), m_autoUi.txtMailPass->text());
+        AppSettings::settings().setValue(AppSettings::keyMailFrom(), m_autoUi.txtMailFrom->text().trimmed());
+        QStringList recipients;
+        for (const QString& line : m_autoUi.txtMailRecipients->toPlainText().split('\n'))
+            if (!line.trimmed().isEmpty()) recipients << line.trimmed();
+        AppSettings::settings().setValue(AppSettings::keyMailRecipients(), recipients);
+        AppSettings::settings().setValue(AppSettings::keyMailDailyEnabled(), m_autoUi.chkMailDaily->isChecked());
+        AppSettings::settings().setValue(AppSettings::keyMailDailyTime(),
+                                         m_autoUi.timeMailDaily->time().toString("HH:mm"));
+        AppSettings::settings().setValue(AppSettings::keyMailMonthlyEnabled(), m_autoUi.chkMailMonthly->isChecked());
+        AppSettings::settings().setValue(AppSettings::keyMailMonthlyDay(), m_autoUi.spinMailMonthlyDay->value());
+        AppSettings::settings().setValue(AppSettings::keyMailMonthlyTime(),
+                                         m_autoUi.timeMailMonthly->time().toString("HH:mm"));
+        AppSettings::settings().setValue(AppSettings::keyMailAttachBackup(), m_autoUi.chkMailAttach->isChecked());
+    }
+    // Backups
+    if (m_autoUi.txtBackupFolder) {
+        AppSettings::settings().setValue(AppSettings::keyBackupFolder(), m_autoUi.txtBackupFolder->text().trimmed());
+        AppSettings::settings().setValue(AppSettings::keyBackupKeep(), m_autoUi.spinBackupKeep->value());
+        AppSettings::settings().setValue(AppSettings::keyBackupScheduleEnabled(), m_autoUi.chkBackupSchedule->isChecked());
+        AppSettings::settings().setValue(AppSettings::keyBackupScheduleTime(),
+                                         m_autoUi.timeBackupSchedule->time().toString("HH:mm"));
+        AppSettings::settings().setValue(AppSettings::keyBackupOnlineMail(), m_autoUi.chkBackupOnlineMail->isChecked());
+        AppSettings::settings().setValue(AppSettings::keyBackupOnlineHttp(), m_autoUi.chkBackupOnlineHttp->isChecked());
+        AppSettings::settings().setValue(AppSettings::keyBackupHttpUrl(), m_autoUi.txtBackupHttpUrl->text().trimmed());
+        AppSettings::settings().setValue(AppSettings::keyBackupHttpToken(), m_autoUi.txtBackupHttpToken->text().trimmed());
+    }
+    // Auto-update
+    if (m_autoUi.chkUpdates) {
+        AppSettings::settings().setValue(AppSettings::keyUpdateEnabled(), m_autoUi.chkUpdates->isChecked());
+    }
+
+    startRemoteServerIfEnabled();
+    showStatus(Tr::trS("Automation settings saved."), 3000);
+}
+
+// ── Remote dashboard server ─────────────────────────────────────
+void MainWindow::startRemoteServerIfEnabled()
+{
+    const QString token = AppSettings::remoteToken().trimmed();
+    // The token is the only gate on a network-exposed, plaintext service, so
+    // refuse to run with a missing or trivially guessable one.
+    if (!AppSettings::remoteEnabled() || token.size() < 16) {
+        stopRemoteServer();
+        if (m_autoUi.lblRemoteStatus) {
+            m_autoUi.lblRemoteStatus->setText(
+                AppSettings::remoteEnabled()
+                    ? Tr::trS("Remote token must be at least %1 characters.").arg(16)
+                    : Tr::trS("Dashboard stopped."));
+        }
+        return;
+    }
+    if (!m_remoteServer) {
+        m_remoteServer = new RemoteServer(m_db, this);
+        connect(m_remoteServer, &RemoteServer::logMessage, this, [this](const QString& line) {
+            AppLogger::instance().log("REMOTE", line);
+        });
+    }
+    if (m_remoteServer->isRunning()) {
+        if (m_autoUi.lblRemoteStatus)
+            m_autoUi.lblRemoteStatus->setText(
+                Tr::trS("Running on port %1").arg(m_remoteServer->effectivePort()));
+        return;
+    }
+    QString err;
+    if (!m_remoteServer->start(quint16(AppSettings::remotePort()), token, &err)) {
+        if (m_autoUi.lblRemoteStatus)
+            m_autoUi.lblRemoteStatus->setText(Tr::trS("Dashboard error: %1").arg(Tr::trS(err)));
+        showStatus(Tr::trS("Dashboard error: %1").arg(Tr::trS(err)), 8000);
+        return;
+    }
+    const QString url = QString("http://%1:%2/?token=%3")
+        .arg(QHostInfo::localHostName())
+        .arg(m_remoteServer->effectivePort())
+        .arg(token);
+    if (m_autoUi.lblRemoteStatus) {
+        m_autoUi.lblRemoteStatus->setText(
+            Tr::trS("Running on port %1").arg(m_remoteServer->effectivePort())
+            + "\n" + Tr::trS("Dashboard URL: ") + url);
+    }
+    showStatus(Tr::trS("Running on port %1").arg(m_remoteServer->effectivePort()), 5000);
+}
+
+void MainWindow::stopRemoteServer()
+{
+    if (m_remoteServer) {
+        m_remoteServer->stop();
+        delete m_remoteServer;
+        m_remoteServer = nullptr;
+    }
+}
+
+// ── Scheduler: daily/monthly e-mail + scheduled backups ─────────
+void MainWindow::onSchedulerTick()
+{
+    const QString now = QTime::currentTime().toString("HH:mm");
+    const QString today = QDate::currentDate().toString("yyyy-MM-dd");
+
+    // Daily summary e-mail.
+    if (AppSettings::mailEnabled() && AppSettings::mailDailyEnabled()
+        && now == AppSettings::mailDailyTime()
+        && AppSettings::mailDailyLast() != today) {
+        AppSettings::settings().setValue(AppSettings::keyMailDailyLast(), today);
+        sendSummaryEmailNow(false);
+    }
+
+    // Monthly summary e-mail (fires on the configured day of month).
+    if (AppSettings::mailEnabled() && AppSettings::mailMonthlyEnabled()
+        && QDate::currentDate().day() == AppSettings::mailMonthlyDay()
+        && now == AppSettings::mailMonthlyTime()
+        && AppSettings::mailMonthlyLast() != QDate::currentDate().toString("yyyy-MM")) {
+        AppSettings::settings().setValue(AppSettings::keyMailMonthlyLast(),
+                                         QDate::currentDate().toString("yyyy-MM"));
+        sendSummaryEmailNow(true);
+    }
+
+    // Scheduled local backup.
+    if (AppSettings::backupScheduleEnabled()
+        && now == AppSettings::backupScheduleTime()
+        && AppSettings::backupScheduleLast() != today) {
+        AppSettings::settings().setValue(AppSettings::keyBackupScheduleLast(), today);
+        createBackupNow();
+    }
+}
+
+// ── E-mail summary (blocking SMTP on a worker thread) ───────────
+void MainWindow::sendSummaryEmailNow(bool monthly)
+{
+    if (m_mailInProgress) {
+        showStatus(Tr::trS("E-mail sending is already in progress."), 4000);
+        return;
+    }
+
+    const QStringList recipients = AppSettings::mailRecipients();
+    SmtpSettings st;
+    st.host = AppSettings::mailHost();
+    st.port = AppSettings::mailPort();
+    st.security = AppSettings::mailSecurity();
+    st.username = AppSettings::mailUsername();
+    st.password = AppSettings::mailPassword();
+    st.from = AppSettings::mailFrom();
+    st.fromName = "QMark";
+
+    if (st.host.isEmpty() || st.from.isEmpty() || recipients.isEmpty()) {
+        showStatus(Tr::trS("E-mail settings are incomplete."), 6000);
+        return;
+    }
+
+    SmtpMessage msg;
+    msg.subject = "QMark — " + Tr::trS(monthly ? "MONTHLY SHOP SUMMARY" : "DAILY SHOP SUMMARY");
+    msg.bodyPlain = Summary::buildText(monthly, m_db);
+    msg.recipients = recipients;
+    if (AppSettings::mailAttachBackup()) {
+        msg.attachments.append({ Backup::archiveFileName(QDateTime::currentDateTime()),
+                                 Backup::buildBundle() });
+    }
+
+    showStatus(Tr::trS("Sending e-mail…"), 4000);
+    if (m_autoUi.lblMailStatus) m_autoUi.lblMailStatus->setText(Tr::trS("Sending e-mail…"));
+    m_mailInProgress = true;
+
+    QPointer<MainWindow> guard = this;
+    std::thread([guard, st, msg, monthly]() {
+        QString err;
+        const bool ok = smtpSend(st, msg, 60000, &err);
+        if (!guard) return;
+        QMetaObject::invokeMethod(guard, [guard, ok, err, monthly]() {
+            if (!guard) return;
+            guard->m_mailInProgress = false;
+            if (ok) {
+                const QString s = monthly ? Tr::trS("Monthly summary sent.")
+                                          : Tr::trS("Daily summary sent.");
+                if (guard->m_autoUi.lblMailStatus) guard->m_autoUi.lblMailStatus->setText(s);
+                guard->showStatus(s, 6000);
+            } else {
+                const QString s = Tr::trS("E-mail failed: %1").arg(Tr::trS(err));
+                if (guard->m_autoUi.lblMailStatus) guard->m_autoUi.lblMailStatus->setText(s);
+                guard->showStatus(s, 8000);
+            }
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+// ── Backups: local ZIP + optional online legs (worker thread) ──
+void MainWindow::createBackupNow()
+{
+    if (m_backupInProgress) {
+        showStatus(Tr::trS("Backup already in progress."), 4000);
+        return;
+    }
+    m_backupInProgress = true;
+    if (m_autoUi.lblBackupStatus) {
+        m_autoUi.lblBackupStatus->setText(Tr::trS("Creating backup…"));
+        m_autoUi.lblBackupStatus->setStyleSheet("color: #2e7d32; background: transparent;");
+    }
+
+    const QString folder = AppSettings::backupFolder();
+    const int keep = AppSettings::backupKeep();
+    const bool onlineHttp = AppSettings::backupOnlineHttp();
+    const bool onlineMail = AppSettings::backupOnlineMail();
+    const QString httpUrl = AppSettings::backupHttpUrl();
+    const QString httpToken = AppSettings::backupHttpToken();
+    const QStringList recipients = AppSettings::mailRecipients();
+
+    SmtpSettings st;
+    st.host = AppSettings::mailHost();
+    st.port = AppSettings::mailPort();
+    st.security = AppSettings::mailSecurity();
+    st.username = AppSettings::mailUsername();
+    st.password = AppSettings::mailPassword();
+    st.from = AppSettings::mailFrom();
+    st.fromName = "QMark";
+
+    QPointer<MainWindow> guard = this;
+    std::thread([guard, folder, keep, onlineHttp, onlineMail, httpUrl, httpToken,
+                 recipients, st]() {
+        QString err;
+        const QString path = Backup::createLocal(folder, keep, &err);
+        const QString stamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
+        QString report;
+        if (path.isEmpty()) {
+            report = Tr::trS("Backup failed: %1").arg(Tr::trS(err));
+        } else {
+            report = Tr::trS("Backup created: %1").arg(path);
+        }
+
+        // Online legs (only when the local backup succeeded and enabled).
+        if (!path.isEmpty()) {
+            const QByteArray bundle = Backup::buildBundle();
+            const QString fileName = Backup::archiveFileName(QDateTime::currentDateTime());
+            if (onlineHttp) {
+                QString uerr;
+                if (!Backup::uploadHttp(httpUrl, httpToken, bundle, fileName, &uerr))
+                    report += "\n" + Tr::trS("Online upload failed: %1").arg(Tr::trS(uerr));
+            }
+            if (onlineMail) {
+                SmtpMessage m;
+                m.subject = "QMark backup — " + QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
+                m.bodyPlain = Tr::trS("Backup created: %1").arg(fileName);
+                m.recipients = recipients;
+                m.attachments.append({ fileName, bundle });
+                QString merr;
+                if (!smtpSend(st, m, 60000, &merr))
+                    report += "\n" + Tr::trS("E-mail failed: %1").arg(Tr::trS(merr));
+            }
+        }
+
+        if (!guard) return;
+        QMetaObject::invokeMethod(guard, [guard, report, path, stamp]() {
+            if (!guard) return;
+            guard->m_backupInProgress = false;
+            if (!path.isEmpty())
+                AppSettings::settings().setValue(AppSettings::keyBackupLastAt(), stamp);
+            if (guard->m_autoUi.lblBackupStatus)
+                guard->m_autoUi.lblBackupStatus->setText(report);
+            guard->showStatus(report, 7000);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+// ── Auto-update check + install (worker thread + restart) ───────
+void MainWindow::checkUpdatesNow()
+{
+    if (m_updateCheckInProgress) {
+        showStatus(Tr::trS("Checking for updates…"), 3000);
+        return;
+    }
+    m_updateCheckInProgress = true;
+    if (m_autoUi.lblUpdateStatus) {
+        m_autoUi.lblUpdateStatus->setText(Tr::trS("Checking for updates…"));
+        m_autoUi.lblUpdateStatus->setStyleSheet("color: #2e7d32; background: transparent;");
+    }
+
+    QPointer<MainWindow> guard = this;
+    std::thread([guard]() {
+        UpdateInfo info;
+        QString err;
+        const bool ok = Updater::checkLatest(&info, &err);
+        if (!guard) return;
+        QMetaObject::invokeMethod(guard, [guard, ok, info, err]() {
+            if (!guard) return;
+            guard->m_updateCheckInProgress = false;
+            if (!ok) {
+                guard->noteUpdateCheckResult(Tr::trS("Update check failed: %1").arg(Tr::trS(err)), QString());
+                return;
+            }
+            if (!info.newer) {
+                guard->noteUpdateCheckResult(Tr::trS("Update check: up to date."), info.tag);
+                return;
+            }
+
+            guard->noteUpdateCheckResult(Tr::trS("Update available: %1").arg(info.tag), info.tag);
+            const int choice = QMessageBox::question(
+                guard, Tr::trS("Updates"),
+                Tr::trS("Download and apply update %1?").arg(info.tag),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            if (choice != QMessageBox::Yes) return;
+
+            // Download + swap on a worker thread, then restart.
+            QPointer<MainWindow> g2 = guard;
+            std::thread([g2, info]() {
+                // Download next to the executable (same volume/filesystem)
+                // so the final rename cannot fail across drives.
+                const QString dest = QDir(
+                    QCoreApplication::applicationDirPath())
+                    .filePath(info.assetName + QStringLiteral(".part"));
+                QString err;
+                if (!Updater::download(info, dest, &err)) {
+                    if (!g2) return;
+                    QMetaObject::invokeMethod(g2, [g2, err]() {
+                        if (!g2) return;
+                        g2->noteUpdateCheckResult(Tr::trS("Update install failed: %1").arg(Tr::trS(err)), QString());
+                    }, Qt::QueuedConnection);
+                    return;
+                }
+                const QString applyErrTarget = QCoreApplication::applicationFilePath();
+                QString aerr;
+                const bool applied = Updater::apply(dest, applyErrTarget, &aerr);
+                if (!g2) return;
+                QMetaObject::invokeMethod(g2, [g2, applied, aerr]() {
+                    if (!g2) return;
+                    if (applied) {
+                        g2->noteUpdateCheckResult(Tr::trS("Update installed — restarting…"), QString());
+                        g2->close();
+                    } else {
+                        g2->noteUpdateCheckResult(Tr::trS("Update install failed: %1").arg(Tr::trS(aerr)), QString());
+                    }
+                }, Qt::QueuedConnection);
+            }).detach();
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void MainWindow::noteUpdateCheckResult(const QString& result, const QString& detail)
+{
+    if (m_autoUi.lblUpdateStatus) {
+        m_autoUi.lblUpdateStatus->setText(result);
+        m_autoUi.lblUpdateStatus->setStyleSheet("color: #2e7d32; background: transparent;");
+    }
+    showStatus(result, 7000);
+    AppSettings::settings().setValue(AppSettings::keyUpdateLastCheck(),
+        QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"));
+    if (!detail.isEmpty())
+        AppSettings::settings().setValue(AppSettings::keyUpdateLastSeen(), detail);
+}
+
+// ── Scanner: sell the scanned product code ──────────────────────
+void MainWindow::setScannerMode(bool on)
+{
+    m_scannerEnabled = on;
+    AppSettings::settings().setValue(AppSettings::keyScanEnabled(), on);
+    // Keep every visible toggle reflecting the shared state.
+    auto syncCheck = [this](QCheckBox* cb) {
+        if (!cb) return;
+        cb->blockSignals(true);
+        cb->setChecked(m_scannerEnabled);
+        cb->blockSignals(false);
+    };
+    syncCheck(ui->chkScanner_sell);
+    syncCheck(ui->chkScanner_item);
+    syncCheck(ui->chkScanner_item_edit);
+    syncCheck(ui->chkScanner_remove);
+    syncCheck(m_autoUi.chkScanner);
+}
+
+void MainWindow::startAddWithBarcode(const QString& code)
+{
+    // Clerks cannot add items; keep them on the POS page with a message.
+    if (getCurrentUserRole() == Domain::User::Role::UserRole) {
+        showStatus(Tr::trS("Barcode not found: %1").arg(code), 5000);
+        return;
+    }
+    goToPage(2);
+    if (ui->chkAutogenerateID_item) ui->chkAutogenerateID_item->setChecked(false);
+    // The burst's first keystroke was not consumed, so it may have landed
+    // in a focused field — clear the form, then pre-fill the barcode.
+    if (ui->txtName_item)     ui->txtName_item->clear();
+    if (ui->txtQuantity_item) ui->txtQuantity_item->clear();
+    if (ui->txtPrice_item)    ui->txtPrice_item->clear();
+    if (ui->txtCategory_item) ui->txtCategory_item->clear();
+    if (ui->txtShelf_item)    ui->txtShelf_item->clear();
+    if (ui->txtId_item) {
+        ui->txtId_item->clear();
+        ui->txtId_item->setText(code);
+    }
+    if (ui->txtName_item) ui->txtName_item->setFocus();
+    showStatus(Tr::trS("Barcode not found — add a new item."), 5000);
+}
+
+void MainWindow::handleScannedCode(const QString& code)
+{
+    if (!m_isLoggedIn) {
+        showStatus(Tr::trS("Scanning requires login."), 4000);
+        return;
+    }
+    const QString c = code.trimmed();
+    if (c.isEmpty()) return;
+
+    const int page = ui->stackedWidget ? ui->stackedWidget->currentIndex() : -1;
+
+    // The candidate first character of the burst was deliberately not
+    // consumed (so a lone fast key is never swallowed); on the POS page it
+    // therefore landed in the search box. Remove it now that the scan is
+    // known to be real.
+    if (page == 6 && ui->txtSearch_sell_page) {
+        ui->txtSearch_sell_page->clear();
+    }
+
+    // Look the barcode up unambiguously: exact id, a single id-like
+    // match, or a sole full-text match.
+    std::optional<std::string> matchId;
+    if (m_db.getItemById(c.toStdString()).has_value()) {
+        matchId = c.toStdString();
+    } else {
+        const auto byId = m_db.searchItems(c.toStdString(), "id");
+        if (byId.size() == 1) matchId = byId.front().id;
+    }
+    if (!matchId) {
+        const auto all = m_db.searchItems(c.toStdString(), "");
+        if (all.size() == 1) matchId = all.front().id;
+    }
+
+    if (matchId) {
+        if (page == 2 || page == 3) {
+            // The barcode already has an item assigned — open it on the
+            // Edit page so its name/price can be changed.
+            if (page == 2) {
+                // The burst's first keystroke may have landed in the add
+                // form; clear it before navigating so no stray character
+                // is left behind for the next manual entry.
+                if (ui->chkAutogenerateID_item) ui->chkAutogenerateID_item->setChecked(true);
+                if (ui->txtName_item)       ui->txtName_item->clear();
+                if (ui->txtQuantity_item)   ui->txtQuantity_item->clear();
+                if (ui->txtPrice_item)      ui->txtPrice_item->clear();
+                if (ui->txtCategory_item)   ui->txtCategory_item->clear();
+                if (ui->txtShelf_item)      ui->txtShelf_item->clear();
+                if (ui->txtId_item)         ui->txtId_item->clear();
+                goToPage(3);
+                if (ui->txtSearch_item_edit) ui->txtSearch_item_edit->setText(c);
+                on_btnSearch_item_edit_clicked();
+            }
+            loadItemToEdit(QString::fromStdString(*matchId));
+            showStatus(Tr::trS("Barcode found — edit item: %1")
+                           .arg(QString::fromStdString(*matchId)), 5000);
+            return;
+        }
+        sellItemById(*matchId);
+        return;
+    }
+
+    // Barcode not assigned to any item: pre-fill the Add Item form so
+    // the operator can enter a name and price for this barcode.
+    startAddWithBarcode(c);
+}
+
+bool MainWindow::sellItemById(const std::string& itemId)
+{
+    auto itemOpt = m_db.getItemById(itemId);
+    if (!itemOpt.has_value()) return false;
+    const auto& item = itemOpt.value();
+
+    if (item.quantity <= 0 || Domain::statusIsSoldOut(item.status)) {
+        showStatus(Tr::trS("This item is out of stock."), 5000);
+        return false;
+    }
+
+    auto result = BusinessLogic::sellItem(
+        m_db, item.id, 1, m_currentUser.value_or(Domain::User{}).id);
+    if (!result.isValid) {
+        showStatus(translatedBusinessMessage(result.errorMessage), 6000);
+        return false;
+    }
+
+    m_worklog.logEntry(WorklogEntry::ActionType::Sale, WorklogEntry::EntityType::Sale,
+                       item.id, "Sold item: " + item.name);
+    if (ui->stackedWidget && ui->stackedWidget->currentIndex() == 6) {
+        refreshSellPage();   // live feedback on the POS page
+    }
+    refreshDashboard();
+    showStatus(Tr::trS("Sold via scanner: %1").arg(QString::fromStdString(item.name)), 4000);
+    return true;
 }

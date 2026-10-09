@@ -6,12 +6,37 @@
 #include <SQLiteCpp/Transaction.h>
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include <stdexcept>
 #include <algorithm>
+#include <cctype>
 #include <unordered_map>
 #include <QDebug>
 
 namespace DataAccess {
+
+namespace {
+// Users type status names ("In Stock", "Niski stan", ...) in searches;
+// map them to the language-independent codes the database now stores.
+std::string statusSearchCode(const std::string& term)
+{
+    std::string lower;
+    lower.reserve(term.size());
+    for (char c : term)
+        lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower == "0" || lower == "1" || lower == "2" || lower == "3") return term;
+    if (lower.find("wyprzed") != std::string::npos) return Domain::statusSoldOut();  // "Wyprzedane"
+    if (lower.find("sold") != std::string::npos) return Domain::statusSoldOut();     // "Sold Out"
+    if (lower.find("out of") != std::string::npos) return Domain::statusOutOfStock();// "Out of Stock"
+    if (lower.find("out-of") != std::string::npos) return Domain::statusOutOfStock();
+    if (lower.find("brak") != std::string::npos) return Domain::statusOutOfStock();  // "Brak w magazynie"
+    if (lower.find("niski") != std::string::npos) return Domain::statusLowStock();   // "Niski stan"
+    if (lower.find("low") != std::string::npos) return Domain::statusLowStock();
+    if (lower.find("magaz") != std::string::npos) return Domain::statusInStock();    // "W magazynie"
+    if (lower.find("stock") != std::string::npos) return Domain::statusInStock();
+    return term;
+}
+} // namespace
 
 SQLiteDataAccess::SQLiteDataAccess()
     : m_connected(false)
@@ -72,7 +97,7 @@ void SQLiteDataAccess::createTables()
             "price REAL NOT NULL DEFAULT 0.0,"
             "category TEXT DEFAULT '',"
             "shelf TEXT DEFAULT '',"
-            "status TEXT NOT NULL DEFAULT 'In Stock',"
+            "status TEXT NOT NULL DEFAULT '0',"
             "createdAt TEXT NOT NULL,"
             "updatedAt TEXT NOT NULL,"
             "deleted INTEGER NOT NULL DEFAULT 0"
@@ -183,7 +208,7 @@ Domain::Item SQLiteDataAccess::rowToItem(const SQLite::Statement& stmt)
     item.price = stmt.getColumn(3).getDouble();
     item.category = stmt.getColumn(4).getText();
     item.shelf = stmt.getColumn(5).getText();
-    item.status = stmt.getColumn(6).getText();
+    item.status = Domain::statusFromLegacy(stmt.getColumn(6).getText());
     item.createdAt = stringToDateTime(stmt.getColumn(7).getText());
     item.updatedAt = stringToDateTime(stmt.getColumn(8).getText());
     return item;
@@ -304,15 +329,21 @@ std::vector<Domain::Item> SQLiteDataAccess::searchItems(const std::string& term,
     sql += " ORDER BY name";
 
     SQLite::Statement query(*m_itemsDb, sql);
-    std::string pattern = "%" + term + "%";
+    const std::string statusPattern = "%" + statusSearchCode(term) + "%";
+    const std::string pattern = "%" + term + "%";
 
     if (field == "name" || field == "category" || field == "shelf" ||
         field == "status" || field == "id" || field == "price") {
-        query.bind(1, pattern);
+        if (field == "status") query.bind(1, statusPattern);
+        else query.bind(1, pattern);
     } else {
-        for (int i = 1; i <= 6; ++i) {
-            query.bind(i, pattern);
-        }
+        // Full-text: name/category/shelf/status use their own patterns.
+        query.bind(1, pattern);
+        query.bind(2, pattern);
+        query.bind(3, pattern);
+        query.bind(4, statusPattern);
+        query.bind(5, pattern);     // id (as TEXT)
+        query.bind(6, pattern);     // price (as TEXT)
     }
 
     while (query.executeStep()) {
@@ -549,9 +580,15 @@ bool SQLiteDataAccess::sellItemAtomic(const std::string& itemId, int quantity, d
     try {
         SQLite::Transaction transaction(*m_itemsDb);
 
-        // 1. Record the sale
-        std::string saleId = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
-            Domain::now().time_since_epoch()).count());
+        // 1. Record the sale. The id is a millisecond timestamp; rapid
+        //    sales (e.g. a barcode scanner firing bursts) can land in the
+        //    very same millisecond, so append a monotonic counter to keep
+        //    PRIMARY KEY collisions impossible.
+        static std::atomic<long long> saleSeq{0};
+        const long long saleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Domain::now().time_since_epoch()).count();
+        const std::string saleId = std::to_string(saleMs) + "-"
+                                 + std::to_string(saleSeq.fetch_add(1) + 1);
         SQLite::Statement saleQuery(*m_itemsDb,
             "INSERT INTO sales (id, itemId, quantitySold, unitPrice, totalAmount, soldBy, saleDate) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)");
@@ -587,9 +624,9 @@ bool SQLiteDataAccess::sellItemAtomic(const std::string& itemId, int quantity, d
         if (qtyQuery.executeStep()) {
             int newQty = qtyQuery.getColumn(0).getInt();
             std::string newStatus;
-            if (newQty == 0) newStatus = "Sold Out";
-            else if (newQty <= 5) newStatus = "Low Stock";
-            else newStatus = "In Stock";
+            if (newQty == 0) newStatus = Domain::statusSoldOut();
+            else if (newQty <= 5) newStatus = Domain::statusLowStock();
+            else newStatus = Domain::statusInStock();
 
             SQLite::Statement statusQuery(*m_itemsDb,
                 "UPDATE items SET status = ? WHERE id = ? AND deleted = 0");

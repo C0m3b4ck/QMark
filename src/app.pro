@@ -2,7 +2,7 @@ TEMPLATE = app
 CONFIG += c++17
 TARGET = QMark
 
-QT += widgets sql
+QT += widgets sql network
 
 # --- Cross-compilation / static build paths ---
 # Override these via qmake args or environment:
@@ -45,14 +45,23 @@ contains(STATIC_BUILD, 1) {
 }
 
 SOURCES += \
+    backup.cpp \
     businesslogic.cpp \
     crypto.cpp \
     main.cpp \
     mainwindow.cpp \
+    netutil.cpp \
+    remoteserver.cpp \
     sanitize_string.cpp \
-    sqlite_dataaccess.cpp
+    smtpclient.cpp \
+    sqlite_dataaccess.cpp \
+    summaryreport.cpp \
+    updater.cpp \
+    zipwriter.cpp
 
 HEADERS += \
+    appsettings.h \
+    backup.h \
     businesslogic.h \
     charts.h \
     crypto.h \
@@ -60,12 +69,19 @@ HEADERS += \
     domain.h \
     logger.h \
     mainwindow.h \
+    netutil.h \
     pdf_export.h \
+    remoteserver.h \
+    smtpclient.h \
     sqlite_dataaccess.h \
     statistics.h \
+    summaryreport.h \
     telemetry.h \
     translations.h \
-    worklog.h
+    updater.h \
+    version.h \
+    worklog.h \
+    zipwriter.h
 
 FORMS += \
     mainwindow.ui

@@ -641,6 +641,9 @@
             <property name="text">
              <string>Auto-generate ID</string>
             </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
            </widget>
           </item>
           <item>
@@ -657,6 +660,13 @@
             </property>
            </widget>
           </item>
+         <item>
+          <widget class="QCheckBox" name="chkScanner_item">
+           <property name="text">
+            <string>Scanner</string>
+           </property>
+          </widget>
+         </item>
          </layout>
         </item>
         <item>
@@ -911,6 +921,13 @@
             </property>
            </widget>
           </item>
+         <item>
+          <widget class="QCheckBox" name="chkScanner_item_edit">
+           <property name="text">
+            <string>Scanner</string>
+           </property>
+          </widget>
+         </item>
          </layout>
         </item>
         <item>
@@ -1166,6 +1183,13 @@
             </property>
            </widget>
           </item>
+         <item>
+          <widget class="QCheckBox" name="chkScanner_remove">
+           <property name="text">
+            <string>Scanner</string>
+           </property>
+          </widget>
+         </item>
          </layout>
         </item>
         <item>
@@ -1358,7 +1382,7 @@
           </property>
           <property name="font">
            <font>
-            <pointsize>16</pointsize>
+            <pointsize>14</pointsize>
             <weight>75</weight>
             <bold>true</bold>
            </font>
@@ -1401,6 +1425,13 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QCheckBox" name="chkScanner_sell">
+            <property name="text">
+             <string>Scanner</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </item>
         <item>
@@ -1435,11 +1466,11 @@
         <item>
          <widget class="QCheckBox" name="chkKeybinds_sell">
           <property name="text">
-           <string>Enable sell keybinds (Alt+1-9, Alt+0, Alt+letters, arrows, Enter; Alt+X cancels the last sale)</string>
+           <string>Enable sell keybinds (Alt+keys, arrows, Enter; Alt+X cancels the last sale)</string>
           </property>
           <property name="font">
            <font>
-            <pointsize>12</pointsize>
+            <pointsize>10</pointsize>
            </font>
           </property>
          </widget>
@@ -1451,7 +1482,7 @@
           </property>
           <property name="font">
            <font>
-            <pointsize>12</pointsize>
+            <pointsize>10</pointsize>
            </font>
           </property>
          </widget>
@@ -1461,7 +1492,7 @@
           <property name="minimumSize">
            <size>
             <width>0</width>
-            <height>210</height>
+            <height>115</height>
            </size>
           </property>
           <property name="visible">
@@ -1478,7 +1509,7 @@
              </property>
              <property name="font">
               <font>
-               <pointsize>12</pointsize>
+               <pointsize>11</pointsize>
               </font>
              </property>
             </widget>
@@ -1490,7 +1521,7 @@
              </property>
              <property name="font">
               <font>
-               <pointsize>12</pointsize>
+               <pointsize>11</pointsize>
               </font>
              </property>
             </widget>
@@ -1502,7 +1533,7 @@
              </property>
              <property name="font">
               <font>
-               <pointsize>12</pointsize>
+               <pointsize>11</pointsize>
               </font>
              </property>
             </widget>
@@ -1514,7 +1545,7 @@
              </property>
              <property name="font">
               <font>
-               <pointsize>11</pointsize>
+               <pointsize>10</pointsize>
               </font>
              </property>
              <property name="wordWrap">
@@ -1525,19 +1556,6 @@
              </property>
             </widget>
            </item>
-           <item>
-            <spacer name="statsSpacer">
-             <property name="orientation">
-              <enum>Qt::Vertical</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>20</width>
-               <height>10</height>
-              </size>
-             </property>
-            </spacer>
-           </item>
           </layout>
          </widget>
         </item>
@@ -1546,7 +1564,7 @@
           <property name="minimumSize">
            <size>
             <width>0</width>
-            <height>190</height>
+            <height>145</height>
            </size>
           </property>
           <property name="styleSheet">
@@ -3062,6 +3080,8 @@
     <addaction name="actionPreferences"/>
     <addaction name="actionWorklogStats"/>
     <addaction name="actionTroubleshoot"/>
+    <addaction name="separator"/>
+    <addaction name="actionAutomation"/>
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuSell"/>
@@ -3186,6 +3206,11 @@
   <action name="actionResupply">
    <property name="text">
     <string>Resupply</string>
+   </property>
+  </action>
+  <action name="actionAutomation">
+   <property name="text">
+    <string>Automation &amp; Remote</string>
    </property>
   </action>
  </widget>
