@@ -10,7 +10,7 @@
 #include <mutex>
 
 struct WorklogEntry {
-    enum class ActionType { Add, Edit, Remove, Sale, Undo };
+    enum class ActionType { Add, Edit, Remove, Sale, Return, Undo };
     enum class EntityType { Item, Sale, Category, Shelf, User };
 
     ActionType action;
@@ -27,6 +27,7 @@ struct WorklogEntry {
             case ActionType::Edit:   return "EDIT";
             case ActionType::Remove: return "REMOVE";
             case ActionType::Sale:   return "SALE";
+            case ActionType::Return: return "RETURN";
             case ActionType::Undo:   return "UNDO";
         }
         return "UNKNOWN";
@@ -126,6 +127,8 @@ public:
 
     int getSaleUndoCount() const { return countBy(WorklogEntry::ActionType::Undo, WorklogEntry::EntityType::Sale); }
 
+    int getDepositReturnCount() const { return countBy(WorklogEntry::ActionType::Return, WorklogEntry::EntityType::Sale); }
+
     int getCategoryAddCount() const { return countBy(WorklogEntry::ActionType::Add, WorklogEntry::EntityType::Category); }
     int getCategoryEditCount() const { return countBy(WorklogEntry::ActionType::Edit, WorklogEntry::EntityType::Category); }
     int getCategoryRemoveCount() const { return countBy(WorklogEntry::ActionType::Remove, WorklogEntry::EntityType::Category); }
@@ -151,6 +154,7 @@ public:
             *m_stream << "Items removed: " << getItemRemoveCount() << "\n";
             *m_stream << "Sales recorded: " << getSaleCount() << "\n";
             *m_stream << "Sales undone: " << getSaleUndoCount() << "\n";
+            *m_stream << "Deposit returns: " << getDepositReturnCount() << "\n";
             *m_stream << "Categories added: " << getCategoryAddCount() << "\n";
             *m_stream << "Categories edited: " << getCategoryEditCount() << "\n";
             *m_stream << "Categories removed: " << getCategoryRemoveCount() << "\n";

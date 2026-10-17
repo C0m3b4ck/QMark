@@ -10,6 +10,9 @@
 
 namespace ScannerProbe {
 
+// Perform a fresh scan of the input devices (never cached).
+bool detectScannerNow();
+
 // Returns true when the platform reports an input device that is
 // scanner-like (an extra keyboard-type HID device, or a device whose
 // name contains typical scanner/vendor keywords). Pure heuristics —

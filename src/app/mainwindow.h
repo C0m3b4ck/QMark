@@ -18,9 +18,14 @@ class QTimer;
 class QCheckBox;
 class QComboBox;
 class QSpinBox;
+class QDoubleSpinBox;
 class QLineEdit;
 class QPlainTextEdit;
 class QTimeEdit;
+class QMenu;
+class QAction;
+class QToolBar;
+class QToolButton;
 class RemoteServer;
 
 QT_BEGIN_NAMESPACE
@@ -223,6 +228,31 @@ private:
     QWidget* buildResupplyPage();
     QWidget* m_resupplyPage = nullptr;
 
+    // ── Bottle deposit (kaucja) ───────────────────────────────────
+    // The deposit is a real stock item (default value 0.50, editable).
+    // Selling it charges the deposit; returning it refunds the money and
+    // puts the bottle back into stock.
+    QWidget* buildDepositPage();
+    void refreshDepositPage();
+    void openDepositPage();
+    void returnDeposit(int quantity);
+    void saveDepositSettings();
+    bool ensureDepositItem(Domain::Item* out = nullptr);
+    QWidget* m_depositPage = nullptr;
+    struct DepositUi {
+        QLineEdit*      txtName = nullptr;
+        QDoubleSpinBox* spinValue = nullptr;
+        QSpinBox*       spinInitial = nullptr;
+        QSpinBox*       spinReturn = nullptr;
+        QLabel*         lblStock = nullptr;
+        QLabel*         lblStatus = nullptr;
+    };
+    DepositUi m_depUi;
+    QMenu* m_menuDeposit = nullptr;
+    // True while the page widgets are being populated; the toggled()
+    // handlers must not persist half-filled state during that.
+    bool m_applyingDepositSettings = false;
+
     // ── Dashboard ────────────────────────────────────────────────
     void refreshDashboard();
     void updateDashboardClock();
@@ -341,6 +371,14 @@ private:
     // ── Scanner-mode hint labels on Add / Edit pages ───────────────
     QLabel* m_lblScannerHintItem = nullptr;
     QLabel* m_lblScannerHintItemEdit = nullptr;
+
+    // ── Scanner accessibility (top-bar toggle + Scanner menu) ──────
+    void setupScannerAccess();
+    void rescanScannerDevices();
+    QToolBar* m_scannerToolbar = nullptr;
+    QAction*  m_actionScannerToggle = nullptr;
+    QMenu*    m_menuScanner = nullptr;
+    QLabel*   m_scannerToolbarLabel = nullptr;
 };
 
 #endif // MAINWINDOW_H

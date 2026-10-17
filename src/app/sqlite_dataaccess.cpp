@@ -36,6 +36,41 @@ std::string statusSearchCode(const std::string& term)
     if (lower.find("stock") != std::string::npos) return Domain::statusInStock();
     return term;
 }
+
+// Monotonic sale id: millisecond timestamp + a counter, so rapid-fire
+// sales (a barcode-scanner burst) can never collide on the PRIMARY KEY.
+std::string nextSaleId()
+{
+    static std::atomic<long long> saleSeq{0};
+    const long long saleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        Domain::now().time_since_epoch()).count();
+    return std::to_string(saleMs) + "-" + std::to_string(saleSeq.fetch_add(1) + 1);
+}
+
+// Status code implied by a stock quantity (matches the sale path).
+std::string statusForQuantity(int qty)
+{
+    if (qty <= 0) return Domain::statusSoldOut();
+    if (qty <= 5) return Domain::statusLowStock();
+    return Domain::statusInStock();
+}
+
+// Recompute an item's status from its (already-updated) quantity.
+// Caller holds the data-layer mutex and is inside a transaction.
+void refreshItemStatusLocked(SQLite::Database& db, const std::string& itemId)
+{
+    SQLite::Statement qtyQuery(db,
+        "SELECT quantity FROM items WHERE id = ? AND deleted = 0");
+    qtyQuery.bind(1, itemId);
+    if (qtyQuery.executeStep()) {
+        const std::string newStatus = statusForQuantity(qtyQuery.getColumn(0).getInt());
+        SQLite::Statement statusQuery(db,
+            "UPDATE items SET status = ? WHERE id = ? AND deleted = 0");
+        statusQuery.bind(1, newStatus);
+        statusQuery.bind(2, itemId);
+        statusQuery.exec();
+    }
+}
 } // namespace
 
 SQLiteDataAccess::SQLiteDataAccess()
@@ -178,6 +213,36 @@ void SQLiteDataAccess::createTables()
             "role INTEGER NOT NULL DEFAULT 1,"
             "createdAt TEXT NOT NULL,"
             "lastLogin TEXT"
+            ");"
+        );
+
+        // Feature grants: subject_type in ('user','role'), subject_id is username or role name/number
+        m_usersDb->exec(
+            "CREATE TABLE IF NOT EXISTS feature_grants ("
+            "subject_type TEXT NOT NULL,"
+            "subject_id TEXT NOT NULL,"
+            "feature TEXT NOT NULL,"
+            "enabled INTEGER NOT NULL DEFAULT 1,"
+            "PRIMARY KEY(subject_type, subject_id, feature)"
+            ");"
+        );
+
+        // Permission templates: named bundles of feature keys
+        m_usersDb->exec(
+            "CREATE TABLE IF NOT EXISTS permission_templates ("
+            "id TEXT PRIMARY KEY,"
+            "name TEXT NOT NULL,"
+            "features TEXT NOT NULL"
+            ");"
+        );
+
+        // Assign a template to a user or a role
+        m_usersDb->exec(
+            "CREATE TABLE IF NOT EXISTS template_assignments ("
+            "subject_type TEXT NOT NULL,"
+            "subject_id TEXT NOT NULL,"
+            "template_id TEXT NOT NULL,"
+            "PRIMARY KEY(subject_type, subject_id)"
             ");"
         );
     }
@@ -584,11 +649,7 @@ bool SQLiteDataAccess::sellItemAtomic(const std::string& itemId, int quantity, d
         //    sales (e.g. a barcode scanner firing bursts) can land in the
         //    very same millisecond, so append a monotonic counter to keep
         //    PRIMARY KEY collisions impossible.
-        static std::atomic<long long> saleSeq{0};
-        const long long saleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            Domain::now().time_since_epoch()).count();
-        const std::string saleId = std::to_string(saleMs) + "-"
-                                 + std::to_string(saleSeq.fetch_add(1) + 1);
+        const std::string saleId = nextSaleId();
         SQLite::Statement saleQuery(*m_itemsDb,
             "INSERT INTO sales (id, itemId, quantitySold, unitPrice, totalAmount, soldBy, saleDate) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)");
@@ -618,22 +679,7 @@ bool SQLiteDataAccess::sellItemAtomic(const std::string& itemId, int quantity, d
         }
 
         // 3. Auto-update status based on new quantity
-        SQLite::Statement qtyQuery(*m_itemsDb,
-            "SELECT quantity FROM items WHERE id = ? AND deleted = 0");
-        qtyQuery.bind(1, itemId);
-        if (qtyQuery.executeStep()) {
-            int newQty = qtyQuery.getColumn(0).getInt();
-            std::string newStatus;
-            if (newQty == 0) newStatus = Domain::statusSoldOut();
-            else if (newQty <= 5) newStatus = Domain::statusLowStock();
-            else newStatus = Domain::statusInStock();
-
-            SQLite::Statement statusQuery(*m_itemsDb,
-                "UPDATE items SET status = ? WHERE id = ? AND deleted = 0");
-            statusQuery.bind(1, newStatus);
-            statusQuery.bind(2, itemId);
-            statusQuery.exec();
-        }
+        refreshItemStatusLocked(*m_itemsDb, itemId);
 
         // 4. Keep the daily statistics snapshot up to date (GUI-independent:
         //    persisted at the data layer, so it survives the POS being off).
@@ -646,6 +692,68 @@ bool SQLiteDataAccess::sellItemAtomic(const std::string& itemId, int quantity, d
         newSale.soldBy = soldBy;
         newSale.saleDate = Domain::now();
         upsertDailyStatLocked(dailyStatFor(newSale));
+
+        transaction.commit();
+        return true;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
+// Deposit refund / item return: the mirror image of sellItemAtomic.
+// The sale row is stored with a NEGATIVE quantity and amount (so it is a
+// refund in the sales log and lowers the day's revenue), and the returned
+// units are added back to stock. Stock can never run out here, so the
+// only failure mode is a missing item / DB error.
+bool SQLiteDataAccess::returnItemAtomic(const std::string& itemId, int quantity, double unitPrice, double totalAmount, const std::string& soldBy)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_itemsDb) return false;
+    if (quantity <= 0) return false;
+    try {
+        SQLite::Transaction transaction(*m_itemsDb);
+
+        // 1. Record the refund as a negative sale.
+        const std::string saleId = nextSaleId();
+        SQLite::Statement saleQuery(*m_itemsDb,
+            "INSERT INTO sales (id, itemId, quantitySold, unitPrice, totalAmount, soldBy, saleDate) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)");
+        saleQuery.bind(1, saleId);
+        saleQuery.bind(2, itemId);
+        saleQuery.bind(3, -quantity);
+        saleQuery.bind(4, unitPrice);
+        saleQuery.bind(5, -totalAmount);
+        saleQuery.bind(6, soldBy);
+        saleQuery.bind(7, dateTimeToString(Domain::now()));
+        saleQuery.exec();
+
+        // 2. Put the units back into stock.
+        SQLite::Statement updateQuery(*m_itemsDb,
+            "UPDATE items SET quantity = quantity + ?, updatedAt = ? "
+            "WHERE id = ? AND deleted = 0");
+        updateQuery.bind(1, quantity);
+        updateQuery.bind(2, dateTimeToString(Domain::now()));
+        updateQuery.bind(3, itemId);
+        int rows = updateQuery.exec();
+        if (rows == 0) {
+            transaction.rollback();
+            return false;
+        }
+
+        refreshItemStatusLocked(*m_itemsDb, itemId);
+
+        // 3. Daily snapshot: negative revenue / units, so the day's
+        //    takings drop by the refunded amount.
+        Domain::Sale refund;
+        refund.id = saleId;
+        refund.itemId = itemId;
+        refund.quantitySold = -quantity;
+        refund.unitPrice = unitPrice;
+        refund.totalAmount = -totalAmount;
+        refund.soldBy = soldBy;
+        refund.saleDate = Domain::now();
+        upsertDailyStatLocked(dailyStatFor(refund));
 
         transaction.commit();
         return true;

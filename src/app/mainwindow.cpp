@@ -32,6 +32,8 @@
 #include <QRadioButton>
 #include <QTimeEdit>
 #include <QToolButton>
+#include <QDoubleSpinBox>
+#include <QToolBar>
 #include <QScroller>
 #include <QThread>
 #include <QMetaObject>
@@ -378,6 +380,25 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     // ── Build resupply page (appended to the stack) ───────────
     m_resupplyPage = buildResupplyPage();
 
+    // ── Bottle deposit (kaucja): dedicated page + menus ───────
+    m_depositPage = buildDepositPage();
+    ensureDepositItem();          // create the tracked deposit item if missing
+
+    // "Deposit" menu in the menu bar.
+    m_menuDeposit = menuBar()->addMenu(Tr::trS("Deposit"));
+    if (QAction* a = m_menuDeposit->addAction(Tr::trS("Deposit: settings & returns…")))
+        connect(a, &QAction::triggered, this, [this]() { openDepositPage(); });
+    if (QAction* a = m_menuDeposit->addAction(Tr::trS("Return 1 deposit")))
+        connect(a, &QAction::triggered, this, [this]() { returnDeposit(1); });
+    if (QAction* a = m_menuDeposit->addAction(Tr::trS("Charge deposit at POS")))
+        connect(a, &QAction::triggered, this, [this]() { goToPage(6); });
+    // Also surface the return action in the Sell menu.
+    if (ui->menuSell) {
+        ui->menuSell->addSeparator();
+        if (QAction* a = ui->menuSell->addAction(Tr::trS("Return deposit…")))
+            connect(a, &QAction::triggered, this, [this]() { openDepositPage(); });
+    }
+
     // ── Scanner mode state (settings-driven; timer for burst timing) ─
     m_scannerKeyTimer.start();
     m_scannerEnabled = AppSettings::scanEnabled();
@@ -399,6 +420,10 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     wireScannerToggle(ui->chkScanner_item);
     wireScannerToggle(ui->chkScanner_item_edit);
     wireScannerToggle(ui->chkScanner_remove);
+
+    // Persistent, always-visible scanner controls: a top-bar toggle plus a
+    // dedicated Scanner menu (toggle / settings / rescan).
+    setupScannerAccess();
 
     // ── Build Automation & Remote page (appended after resupply) ─
     m_automationPage = buildAutomationPage();
@@ -646,7 +671,11 @@ void MainWindow::goToPage(int index)
     resetScannerBurst();
 
     if (m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::UserRole) {
-        if (index != 0 && index != 6) return; // clerk: blocked
+        // Clerks keep the POS page and the deposit (kaucja) page; every
+        // other page is reserved for Admin/SuperAdmin.
+        const int depositIdx = (m_depositPage && ui->stackedWidget)
+            ? ui->stackedWidget->indexOf(m_depositPage) : -1;
+        if (index != 0 && index != 6 && index != depositIdx) return; // clerk: blocked
     }
 
     // No leftover credentials: clear the form fields every time the
@@ -710,7 +739,9 @@ void MainWindow::applyLanguageToUi()
 {
     if (ui->centralwidget) Tr::applyLanguage(ui->centralwidget);
     if (menuBar()) Tr::applyLanguage(menuBar());
+    if (m_scannerToolbar) Tr::applyLanguage(m_scannerToolbar);
     if (m_resupplyPage) Tr::applyLanguage(m_resupplyPage);
+    if (m_depositPage) Tr::applyLanguage(m_depositPage);
     if (m_firstRunPage) Tr::applyLanguage(m_firstRunPage);
     if (m_automationPage) Tr::applyLanguage(m_automationPage);
     updatePricePlaceholders();
@@ -4180,7 +4211,74 @@ void MainWindow::setScannerMode(bool on)
     syncCheck(ui->chkScanner_item_edit);
     syncCheck(ui->chkScanner_remove);
     syncCheck(m_autoUi.chkScanner);
+    if (m_actionScannerToggle) {
+        m_actionScannerToggle->blockSignals(true);
+        m_actionScannerToggle->setChecked(m_scannerEnabled);
+        m_actionScannerToggle->blockSignals(false);
+    }
+    if (m_scannerToolbarLabel) {
+        m_scannerToolbarLabel->setText(m_scannerEnabled
+            ? Tr::trS("Scanner: ON") : Tr::trS("Scanner: OFF"));
+        m_scannerToolbarLabel->setStyleSheet(m_scannerEnabled
+            ? "color: #1b5e20; font-weight: bold; background: transparent; padding: 0 6px;"
+            : "color: #b71c1c; font-weight: bold; background: transparent; padding: 0 6px;");
+    }
     updateScannerHints();
+}
+
+// ── Scanner accessibility ──────────────────────────────────────────
+// A persistent top-bar toggle + a dedicated Scanner menu, so scanner
+// mode is never buried in a settings page.
+void MainWindow::setupScannerAccess()
+{
+    // ── Top-bar controls ──
+    m_scannerToolbar = addToolBar(Tr::trS("Scanner"));
+    m_scannerToolbar->setObjectName(QStringLiteral("scannerToolbar"));
+    m_scannerToolbar->setMovable(false);
+
+    m_actionScannerToggle = new QAction(Tr::trS("Scanner mode"), this);
+    m_actionScannerToggle->setCheckable(true);
+    m_actionScannerToggle->setChecked(m_scannerEnabled);
+    m_actionScannerToggle->setToolTip(Tr::trS("Turn barcode scanner mode on or off"));
+    connect(m_actionScannerToggle, &QAction::toggled, this, [this](bool on) {
+        setScannerMode(on);
+        showStatus(Tr::trS(on ? "Scanner mode enabled." : "Scanner mode disabled."), 3000);
+    });
+    m_scannerToolbar->addAction(m_actionScannerToggle);
+
+    m_scannerToolbarLabel = new QLabel();
+    m_scannerToolbarLabel->setObjectName(QStringLiteral("lblScannerToolbarState"));
+    m_scannerToolbar->addWidget(m_scannerToolbarLabel);
+
+    QAction* aSettings = new QAction(Tr::trS("Scanner settings…"), this);
+    connect(aSettings, &QAction::triggered, this, [this]() { on_actionAutomation_triggered(); });
+    m_scannerToolbar->addAction(aSettings);
+
+    // ── Dedicated Scanner menu ──
+    m_menuScanner = menuBar()->addMenu(Tr::trS("Scanner"));
+    m_menuScanner->addAction(m_actionScannerToggle);
+    m_menuScanner->addAction(aSettings);
+    QAction* aRescan = m_menuScanner->addAction(Tr::trS("Rescan for a scanner device"));
+    connect(aRescan, &QAction::triggered, this, [this]() { rescanScannerDevices(); });
+    QAction* aTest = m_menuScanner->addAction(Tr::trS("Test a scan (open POS)"));
+    connect(aTest, &QAction::triggered, this, [this]() { goToPage(6); });
+
+    // Reflect the current state in the toolbar label.
+    setScannerMode(m_scannerEnabled);
+}
+
+void MainWindow::rescanScannerDevices()
+{
+    const bool found = ScannerProbe::detectScannerNow();
+    if (found) {
+        QMessageBox::information(this, Tr::trS("Scanner"),
+            Tr::trS("A scanner-like device was detected. Scanner mode can be enabled."));
+        showStatus(Tr::trS("Scanner device detected."), 5000);
+    } else {
+        QMessageBox::information(this, Tr::trS("Scanner"),
+            Tr::trS("No scanner device was detected. You can still turn scanner mode on manually."));
+        showStatus(Tr::trS("No scanner device detected."), 5000);
+    }
 }
 
 // Forget any in-flight scanner burst (page change, sealed scan, ...).
@@ -4340,4 +4438,297 @@ bool MainWindow::sellItemById(const std::string& itemId)
     refreshDashboard();
     showStatus(Tr::trS("Sold via scanner: %1").arg(QString::fromStdString(item.name)), 4000);
     return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Bottle deposit (kaucja)
+// ═══════════════════════════════════════════════════════════════════
+// The deposit is a real, stock-tracked item: selling it charges the
+// deposit (and takes a bottle out of stock), returning it refunds the
+// money and puts the bottle back. The item id is fixed (settings), the
+// name and value are editable here and through the normal item editor.
+
+// Create the deposit item the first time it is needed. Returns true if
+// the item exists afterwards; fills `out` with the stored/created item.
+bool MainWindow::ensureDepositItem(Domain::Item* out)
+{
+    const std::string id = AppSettings::depositItemId().toStdString();
+    auto existing = m_db.getItemById(id);
+    if (existing.has_value()) {
+        if (out) *out = *existing;
+        return true;
+    }
+
+    Domain::Item it;
+    it.id = id;
+    it.name = AppSettings::depositName().toStdString();
+    it.quantity = qMax(0, AppSettings::depositInitial());
+    it.price = AppSettings::depositValue();
+    if (it.quantity <= 0)      it.status = Domain::statusSoldOut();
+    else if (it.quantity <= 5) it.status = Domain::statusLowStock();
+    else                       it.status = Domain::statusInStock();
+    it.createdAt = Domain::now();
+    it.updatedAt = it.createdAt;
+
+    const bool ok = m_db.addItem(it);
+    if (ok) {
+        LOG_INFO("Deposit item created: " + QString::fromStdString(id));
+        if (out) *out = it;
+    }
+    return ok;
+}
+
+// ── Deposit page ───────────────────────────────────────────────────
+QWidget* MainWindow::buildDepositPage()
+{
+    QWidget* page = new QWidget();
+    page->setObjectName("depositPage");
+    QVBoxLayout* mainLayout = new QVBoxLayout(page);
+    mainLayout->setSpacing(0);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+
+    // ── Top bar ──
+    QFrame* topBar = new QFrame();
+    topBar->setMaximumHeight(60);
+    topBar->setStyleSheet("background: #0078d4;");
+    QHBoxLayout* topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(15, 0, 15, 0);
+
+    QPushButton* btnBack = new QPushButton(Tr::trS("← Back"));
+    btnBack->setStyleSheet(
+        "QPushButton { color: white; background: transparent; border: none; "
+        "font-size: 14px; font-weight: bold; padding: 5px 10px; }"
+        "QPushButton:hover { background: rgba(255,255,255,0.15); border-radius: 4px; }");
+    btnBack->setCursor(Qt::PointingHandCursor);
+    btnBack->setMinimumHeight(36);
+    topLayout->addWidget(btnBack);
+
+    QLabel* title = new QLabel(Tr::trS("Bottle deposit (kaucja)"));
+    title->setStyleSheet("color: white; font-size: 16px; font-weight: bold;");
+    topLayout->addWidget(title);
+    topLayout->addStretch();
+    mainLayout->addWidget(topBar);
+
+    connect(btnBack, &QPushButton::clicked, this, [this]() { goToPage(1); });
+
+    // ── Scrollable content ──
+    QScrollArea* scroll = new QScrollArea();
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    QWidget* body = new QWidget();
+    QVBoxLayout* bodyLayout = new QVBoxLayout(body);
+    bodyLayout->setContentsMargins(15, 15, 15, 15);
+    bodyLayout->setSpacing(14);
+
+    auto section = [](const QString& titleText) {
+        QGroupBox* g = new QGroupBox(titleText);
+        g->setStyleSheet(
+            "QGroupBox { border: 1px solid #ccc; border-radius: 10px; margin-top: 12px; padding-top: 8px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; font-weight: bold; }");
+        return g;
+    };
+    auto hint = [](const QString& text) {
+        QLabel* l = new QLabel(text);
+        l->setWordWrap(true);
+        l->setStyleSheet("color: #666; background: transparent; font-size: 12px;");
+        return l;
+    };
+
+    // ── 1. Deposit item settings ──
+    {
+        QGroupBox* g = section(Tr::trS("Deposit item"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+        v->addWidget(hint(Tr::trS(
+            "The deposit is a normal stock item: selling it charges the deposit, "
+            "returning it refunds the money and returns the bottle to stock.")));
+
+        QGridLayout* grid = new QGridLayout();
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(6);
+        grid->addWidget(new QLabel(Tr::trS("Name")), 0, 0);
+        m_depUi.txtName = new QLineEdit();
+        m_depUi.txtName->setPlaceholderText(Tr::trS("Name"));
+        grid->addWidget(m_depUi.txtName, 0, 1);
+        grid->addWidget(new QLabel(Tr::trS("Value")), 1, 0);
+        m_depUi.spinValue = new QDoubleSpinBox();
+        m_depUi.spinValue->setRange(0.0, 10000.0);
+        m_depUi.spinValue->setDecimals(2);
+        m_depUi.spinValue->setSingleStep(0.10);
+        grid->addWidget(m_depUi.spinValue, 1, 1);
+        grid->addWidget(new QLabel(Tr::trS("Initial stock (bottles)")), 2, 0);
+        m_depUi.spinInitial = new QSpinBox();
+        m_depUi.spinInitial->setRange(0, 1000000);
+        grid->addWidget(m_depUi.spinInitial, 2, 1);
+        v->addLayout(grid);
+
+        QPushButton* btnSave = new QPushButton(Tr::trS("Save deposit settings"));
+        btnSave->setCursor(Qt::PointingHandCursor);
+        connect(btnSave, &QPushButton::clicked, this, [this]() { saveDepositSettings(); });
+        v->addWidget(btnSave, 0, Qt::AlignLeft);
+
+        v->addWidget(hint(Tr::trS(
+            "Initial stock is used when the item is first created; adjust the "
+            "current stock with Edit Items or Resupply.")));
+
+        m_depUi.lblStock = new QLabel();
+        m_depUi.lblStock->setWordWrap(true);
+        m_depUi.lblStock->setStyleSheet("font-weight: bold; background: transparent;");
+        v->addWidget(m_depUi.lblStock);
+        bodyLayout->addWidget(g);
+    }
+
+    // ── 2. Return a deposit ──
+    {
+        QGroupBox* g = section(Tr::trS("Return a deposit"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+        v->addWidget(hint(Tr::trS(
+            "Refund the deposit for returned bottles. The bottles go back into "
+            "stock and the amount is subtracted from today's takings.")));
+
+        QHBoxLayout* row = new QHBoxLayout();
+        row->addWidget(new QLabel(Tr::trS("Bottles returned")));
+        m_depUi.spinReturn = new QSpinBox();
+        m_depUi.spinReturn->setRange(1, 9999);
+        m_depUi.spinReturn->setValue(1);
+        row->addWidget(m_depUi.spinReturn);
+        const int quick[] = { 1, 2, 3, 5, 10 };
+        for (int n : quick) {
+            QPushButton* b = new QPushButton(QStringLiteral("+%1").arg(n));
+            b->setCursor(Qt::PointingHandCursor);
+            b->setToolTip(Tr::trS("Return %1 deposit(s)").arg(n));
+            connect(b, &QPushButton::clicked, this, [this, n]() { returnDeposit(n); });
+            row->addWidget(b);
+        }
+        row->addStretch();
+        v->addLayout(row);
+
+        QPushButton* btnReturn = new QPushButton(Tr::trS("Return deposit"));
+        btnReturn->setStyleSheet(
+            "QPushButton { background: #0078d4; color: white; font-weight: bold; "
+            "padding: 8px 16px; border-radius: 4px; }"
+            "QPushButton:hover { background: #106ebe; }");
+        btnReturn->setCursor(Qt::PointingHandCursor);
+        connect(btnReturn, &QPushButton::clicked, this, [this]() {
+            returnDeposit(m_depUi.spinReturn ? m_depUi.spinReturn->value() : 1);
+        });
+        v->addWidget(btnReturn, 0, Qt::AlignLeft);
+
+        m_depUi.lblStatus = new QLabel();
+        m_depUi.lblStatus->setWordWrap(true);
+        m_depUi.lblStatus->setStyleSheet("color: #2e7d32; font-weight: bold; background: transparent;");
+        v->addWidget(m_depUi.lblStatus);
+        bodyLayout->addWidget(g);
+    }
+
+    bodyLayout->addStretch();
+    scroll->setWidget(body);
+    mainLayout->addWidget(scroll);
+
+    if (ui->stackedWidget) ui->stackedWidget->addWidget(page);
+    refreshDepositPage();
+    return page;
+}
+
+void MainWindow::openDepositPage()
+{
+    // Make sure the item exists so the page is never empty.
+    ensureDepositItem();
+    if (m_depositPage && ui->stackedWidget)
+        goToPage(ui->stackedWidget->indexOf(m_depositPage));
+    refreshDepositPage();
+}
+
+void MainWindow::refreshDepositPage()
+{
+    if (!m_depositPage) return;
+
+    m_applyingDepositSettings = true;
+    if (m_depUi.txtName)    m_depUi.txtName->setText(AppSettings::depositName());
+    if (m_depUi.spinValue)  m_depUi.spinValue->setValue(AppSettings::depositValue());
+    if (m_depUi.spinInitial) m_depUi.spinInitial->setValue(AppSettings::depositInitial());
+    m_applyingDepositSettings = false;
+
+    auto item = m_db.getItemById(AppSettings::depositItemId().toStdString());
+    QString text;
+    if (item.has_value()) {
+        text = Tr::trS("Deposit item \"%1\": %2 bottle(s) in stock, value %3.")
+                   .arg(QString::fromStdString(item->name))
+                   .arg(item->quantity)
+                   .arg(fmtMoney(item->price));
+    } else {
+        text = Tr::trS("Deposit item is not created yet.");
+    }
+    if (m_depUi.lblStock) m_depUi.lblStock->setText(text);
+}
+
+void MainWindow::saveDepositSettings()
+{
+    if (m_applyingDepositSettings) return;
+
+    const QString name = m_depUi.txtName ? m_depUi.txtName->text().trimmed() : QString();
+    const double value = m_depUi.spinValue ? m_depUi.spinValue->value() : 0.50;
+    const int initial = m_depUi.spinInitial ? m_depUi.spinInitial->value() : 0;
+
+    auto& s = AppSettings::settings();
+    if (!name.isEmpty()) s.setValue(AppSettings::keyDepositName(), name);
+    s.setValue(AppSettings::keyDepositValue(), value);
+    s.setValue(AppSettings::keyDepositInitial(), initial);
+
+    // Create the item if needed and reflect the edited name/value.
+    Domain::Item it;
+    if (ensureDepositItem(&it)) {
+        Domain::Item upd = it;
+        upd.name = (name.isEmpty() ? AppSettings::depositName() : name).toStdString();
+        upd.price = value;
+        upd.updatedAt = Domain::now();
+        m_db.updateItem(upd);
+    }
+
+    refreshDepositPage();
+    if (ui->stackedWidget && ui->stackedWidget->currentIndex() == 6) refreshSellPage();
+    refreshDashboard();
+    showStatus(Tr::trS("Deposit settings saved."), 3000);
+}
+
+void MainWindow::returnDeposit(int quantity)
+{
+    if (quantity <= 0) return;
+    if (!m_isLoggedIn) {
+        showStatus(Tr::trS("Please log in first."), 4000);
+        return;
+    }
+
+    Domain::Item item;
+    if (!ensureDepositItem(&item)) {
+        if (m_depUi.lblStatus)
+            m_depUi.lblStatus->setText(Tr::trS("The deposit item could not be created."));
+        return;
+    }
+
+    auto result = BusinessLogic::returnDeposit(
+        m_db, item.id, quantity, m_currentUser.value_or(Domain::User{}).id);
+    if (!result.isValid) {
+        if (m_depUi.lblStatus)
+            m_depUi.lblStatus->setText(translatedBusinessMessage(result.errorMessage));
+        showStatus(translatedBusinessMessage(result.errorMessage), 6000);
+        return;
+    }
+
+    const double refunded = item.price * quantity;
+    m_worklog.logEntry(WorklogEntry::ActionType::Return, WorklogEntry::EntityType::Sale,
+                       item.id, "Deposit returned: " + item.name + " x" + std::to_string(quantity));
+    LOG_INFO(QString("Deposit returned: %1 x%2 (%3)")
+                 .arg(QString::fromStdString(item.name))
+                 .arg(quantity)
+                 .arg(fmtMoney(refunded)));
+
+    const QString msg = Tr::trS("Returned %1 deposit(s) — refunded %2.")
+                            .arg(quantity)
+                            .arg(fmtMoney(refunded));
+    if (m_depUi.lblStatus) m_depUi.lblStatus->setText(msg);
+    showStatus(msg, 4000);
+
+    refreshDepositPage();
+    if (ui->stackedWidget && ui->stackedWidget->currentIndex() == 6) refreshSellPage();
+    refreshDashboard();
 }

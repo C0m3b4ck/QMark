@@ -69,6 +69,10 @@ ValidationResult updateShelf(DataAccess::IDataAccess& db, const DTO::ShelfDTO& s
 // Sale logic
 ValidationResult sellItem(DataAccess::IDataAccess& db, const std::string& itemId, int quantity, const std::string& clerkId);
 
+// Deposit / return logic: refunds the deposit for the returned units and
+// puts them back into stock (records a negative "refund" sale).
+ValidationResult returnDeposit(DataAccess::IDataAccess& db, const std::string& itemId, int quantity, const std::string& clerkId);
+
 // Authentication
 std::optional<Domain::User> login(DataAccess::IDataAccess& db, const std::string& username, const std::string& password);
 

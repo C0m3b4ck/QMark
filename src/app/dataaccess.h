@@ -44,6 +44,10 @@ public:
     virtual bool recordSale(const Domain::Sale& sale) = 0;
     virtual bool deleteSale(const std::string& saleId) = 0;
     virtual bool sellItemAtomic(const std::string& itemId, int quantity, double unitPrice, double totalAmount, const std::string& soldBy) = 0;
+    // Deposit/return counterpart of sellItemAtomic: records a negative
+    // (refund) sale, puts the returned units back into stock and reduces
+    // the day's takings. Never refuses on stock.
+    virtual bool returnItemAtomic(const std::string& itemId, int quantity, double unitPrice, double totalAmount, const std::string& soldBy) = 0;
     virtual std::vector<Domain::Sale> getAllSales() = 0;
     virtual std::vector<Domain::Sale> getSalesForItem(const std::string& itemId) = 0;
     virtual std::vector<Domain::Sale> getSalesByUser(const std::string& userId) = 0;

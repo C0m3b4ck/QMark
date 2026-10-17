@@ -27,6 +27,16 @@ inline QString keyRemoteToken()    { return "remote/token"; }
 
 inline QString keyScanEnabled()    { return "scan/enabled"; }
 
+// ── Bottle deposit (kaucja) ────────────────────────────────────────
+// The deposit is tracked as a real stock item: selling it charges the
+// deposit (and decrements the bottle stock), returning it refunds the
+// money and puts the bottle back into stock.
+inline QString keyDepositEnabled() { return "deposit/enabled"; }
+inline QString keyDepositItemId()  { return "deposit/itemId"; }
+inline QString keyDepositName()    { return "deposit/name"; }
+inline QString keyDepositValue()   { return "deposit/value"; }
+inline QString keyDepositInitial() { return "deposit/initial"; }
+
 inline QString keyMailEnabled()    { return "mail/enabled"; }
 inline QString keyMailHost()       { return "mail/host"; }
 inline QString keyMailPort()       { return "mail/port"; }
@@ -81,6 +91,15 @@ inline bool scanEnabled() {
     static const bool hardwareDetected = ScannerProbe::hardwareScannerPresent();
     return settings().value(keyScanEnabled(), hardwareDetected).toBool();
 }
+
+// Bottle deposit (kaucja). Enabled by default: the deposit item is
+// created lazily and behaves like any other stock item, so it shows up
+// on the POS grid and in the item lists.
+inline bool   depositEnabled() { return settings().value(keyDepositEnabled(), true).toBool(); }
+inline QString depositItemId() { return settings().value(keyDepositItemId(), "KAUCJA").toString(); }
+inline QString depositName()   { return settings().value(keyDepositName(), "Kaucja").toString(); }
+inline double depositValue()   { return settings().value(keyDepositValue(), 0.50).toDouble(); }
+inline int    depositInitial() { return settings().value(keyDepositInitial(), 0).toInt(); }
 
 inline bool mailEnabled()              { return settings().value(keyMailEnabled(), false).toBool(); }
 inline QString mailHost()              { return settings().value(keyMailHost()).toString(); }

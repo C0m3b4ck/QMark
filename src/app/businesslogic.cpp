@@ -217,6 +217,30 @@ ValidationResult sellItem(DataAccess::IDataAccess& db, const std::string& itemId
     return ValidationResult::success();
 }
 
+// Refund a deposit (or, generally, take an item back): the returned units
+// are put back into stock and a negative "refund" sale is recorded so the
+// day's takings drop by the refunded amount. Unlike a sale it can never
+// fail on stock, so only a missing item / DB error is a failure.
+ValidationResult returnDeposit(DataAccess::IDataAccess& db, const std::string& itemId, int quantity, const std::string& clerkId) {
+    if (quantity <= 0) {
+        return ValidationResult::failure("Return quantity must be at least 1");
+    }
+
+    auto itemOpt = db.getItemById(itemId);
+    if (!itemOpt.has_value()) {
+        return ValidationResult::failure("Deposit item not found");
+    }
+
+    Domain::Item item = itemOpt.value();
+    double totalAmount = item.price * quantity;
+
+    if (!db.returnItemAtomic(itemId, quantity, item.price, totalAmount, clerkId)) {
+        return ValidationResult::failure("Failed to record the deposit return (DB error)");
+    }
+
+    return ValidationResult::success();
+}
+
 // ============ Database ============
 
 DatabaseValidationResult validateDatabases(DataAccess::IDataAccess& db) {
