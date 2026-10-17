@@ -10,8 +10,8 @@
 // (e.g. alpha_13 → 14.0.0) so updates keep being detected.
 // ─────────────────────────────────────────────────────────────────────
 
-#define QMARK_VERSION_STRING "alpha_14"
-#define QMARK_VERSION_SEQ    14
+#define QMARK_VERSION_STRING "alpha_15"
+#define QMARK_VERSION_SEQ    15
 
 // Repository used by the automatic update checker (owner/repo).
 #define QMARK_GITHUB_REPO    "C0m3b4ck/QMark"

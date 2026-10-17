@@ -12,6 +12,7 @@
 
 // Automation & remote-feature modules.
 #include "appsettings.h"
+#include "assistantdialog.h"
 #include "backup.h"
 #include "netutil.h"
 #include "remoteserver.h"
@@ -424,6 +425,9 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     // Persistent, always-visible scanner controls: a top-bar toggle plus a
     // dedicated Scanner menu (toggle / settings / rescan).
     setupScannerAccess();
+
+    // Optional on-device help assistant, reachable from the Help menu.
+    setupHelpMenu();
 
     // ── Build Automation & Remote page (appended after resupply) ─
     m_automationPage = buildAutomationPage();
@@ -4279,6 +4283,29 @@ void MainWindow::rescanScannerDevices()
             Tr::trS("No scanner device was detected. You can still turn scanner mode on manually."));
         showStatus(Tr::trS("No scanner device detected."), 5000);
     }
+}
+
+// ── Help menu / on-device assistant ───────────────────────────────
+// A dedicated Help menu keeps the optional assistant discoverable
+// without burying it in Preferences. The action opens the assistant
+// window, which offers a one-time (double-confirmed) download.
+void MainWindow::setupHelpMenu()
+{
+    QMenu* help = menuBar()->addMenu(Tr::trS("Help"));
+
+    m_actionAssistant = new QAction(Tr::trS("QMark Assistant…"), this);
+    m_actionAssistant->setToolTip(Tr::trS(
+        "Ask a small offline assistant questions about how to use QMark"));
+    connect(m_actionAssistant, &QAction::triggered, this, [this]() { openAssistant(); });
+    help->addAction(m_actionAssistant);
+}
+
+void MainWindow::openAssistant()
+{
+    // The assistant is a read-only help tool: available to any operator,
+    // logged in or not. Closing the dialog stops the local model process.
+    AssistantDialog dlg(this);
+    dlg.exec();
 }
 
 // Forget any in-flight scanner burst (page change, sealed scan, ...).

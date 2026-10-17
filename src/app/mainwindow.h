@@ -379,6 +379,11 @@ private:
     QAction*  m_actionScannerToggle = nullptr;
     QMenu*    m_menuScanner = nullptr;
     QLabel*   m_scannerToolbarLabel = nullptr;
+
+    // ── Help assistant (optional, on-device tiny model) ────────────
+    void setupHelpMenu();
+    void openAssistant();
+    QAction* m_actionAssistant = nullptr;
 };
 
 #endif // MAINWINDOW_H

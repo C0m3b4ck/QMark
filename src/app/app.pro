@@ -47,6 +47,8 @@ contains(STATIC_BUILD, 1) {
 SOURCES += \
     backup.cpp \
     businesslogic.cpp \
+    assistant.cpp \
+    assistantdialog.cpp \
     crypto.cpp \
     main.cpp \
     mainwindow.cpp \
@@ -62,6 +64,8 @@ SOURCES += \
 
 HEADERS += \
     appsettings.h \
+    assistant.h \
+    assistantdialog.h \
     backup.h \
     businesslogic.h \
     charts.h \

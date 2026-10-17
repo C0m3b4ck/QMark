@@ -131,4 +131,31 @@ bool httpPut(const QUrl& url, const Headers& headers, const QByteArray& body,
     return true;
 }
 
+QByteArray httpPost(const QUrl& url, const Headers& headers, const QByteArray& body,
+                    int timeoutMs, bool* ok, QString* err)
+{
+    if (ok) *ok = false;
+
+    QNetworkAccessManager mgr;
+    QNetworkRequest req(url);
+    req.setTransferTimeout(timeoutMs > 0 ? timeoutMs : 120000);
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QStringLiteral("QMark/%1").arg(QStringLiteral(QMARK_VERSION_STRING)));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    for (const auto& h : headers) req.setRawHeader(h.first, h.second);
+
+    QNetworkReply* reply = mgr.post(req, body);
+    waitFinished(reply, timeoutMs);
+
+    const QByteArray resp = reply->readAll();
+    if (reply->error() != QNetworkReply::NoError) {
+        if (err) *err = describeReply(reply);
+        reply->deleteLater();
+        return resp;
+    }
+    if (ok) *ok = true;
+    reply->deleteLater();
+    return resp;
+}
+
 } // namespace Net

@@ -47,12 +47,15 @@ contains(STATIC_BUILD, 1) {
 SOURCES += \
     backup.cpp \
     businesslogic.cpp \
+    assistant.cpp \
+    assistantdialog.cpp \
     crypto.cpp \
     main.cpp \
     mainwindow.cpp \
     netutil.cpp \
     remoteserver.cpp \
     sanitize_string.cpp \
+    scannerdetect.cpp \
     smtpclient.cpp \
     sqlite_dataaccess.cpp \
     summaryreport.cpp \
@@ -61,6 +64,8 @@ SOURCES += \
 
 HEADERS += \
     appsettings.h \
+    assistant.h \
+    assistantdialog.h \
     backup.h \
     businesslogic.h \
     charts.h \
@@ -72,6 +77,7 @@ HEADERS += \
     netutil.h \
     pdf_export.h \
     remoteserver.h \
+    scannerdetect.h \
     smtpclient.h \
     sqlite_dataaccess.h \
     statistics.h \

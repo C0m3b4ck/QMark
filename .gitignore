@@ -47,6 +47,14 @@ QMark-x86
 # Dependency build output
 deps/
 
+# Python caches / training artifacts (reproducible from the committed
+# dataset + scripts; the shipped model is the GGUF release asset)
+__pycache__/
+*.pyc
+assistant/train/lora_adapter/
+assistant/train/checkpoints/
+assistant/release/
+
 # OS
 .DS_Store
 Thumbs.db

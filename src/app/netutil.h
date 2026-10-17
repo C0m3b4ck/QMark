@@ -31,4 +31,10 @@ bool httpDownload(const QUrl& url, const Headers& headers,
 bool httpPut(const QUrl& url, const Headers& headers, const QByteArray& body,
              int timeoutMs, QString* err);
 
+// POST body to url and return the response body. Sets ok=false + err on
+// failure (network error, timeout, or HTTP status >= 400). Meant for
+// worker threads; the helper spins a local event loop.
+QByteArray httpPost(const QUrl& url, const Headers& headers, const QByteArray& body,
+                    int timeoutMs, bool* ok, QString* err);
+
 } // namespace Net

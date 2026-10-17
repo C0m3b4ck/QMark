@@ -70,6 +70,14 @@ inline QString keyUpdateEnabled()  { return "update/enabled"; }
 inline QString keyUpdateLastCheck(){ return "update/lastCheck"; }
 inline QString keyUpdateLastSeen() { return "update/lastSeen"; }
 
+// ── Help assistant (optional, on-device tiny model) ────────────────
+// The assistant is opt-in: nothing is downloaded until the operator
+// confirms twice in the assistant window. Paths are optional overrides;
+// when empty the files live in <appdir>/assistant.
+inline QString keyAssistantDir()         { return "assistant/dir"; }
+inline QString keyAssistantRuntimePath() { return "assistant/runtimePath"; }
+inline QString keyAssistantInstalled()   { return "assistant/installed"; }
+
 // ── Typed getters (with defaults) ───────────────────────────────────
 // Shared application handle (org "QMark", app "SchoolShop") — the same
 // pairing used by every other module in the app.
@@ -134,5 +142,9 @@ inline QString backupLastAt()          { return settings().value(keyBackupLastAt
 inline bool updateEnabled()            { return settings().value(keyUpdateEnabled(), false).toBool(); }
 inline QString updateLastCheck()       { return settings().value(keyUpdateLastCheck()).toString(); }
 inline QString updateLastSeen()        { return settings().value(keyUpdateLastSeen()).toString(); }
+
+inline QString assistantDir()          { return settings().value(keyAssistantDir()).toString(); }
+inline QString assistantRuntimePath()  { return settings().value(keyAssistantRuntimePath()).toString(); }
+inline bool assistantInstalled()       { return settings().value(keyAssistantInstalled(), false).toBool(); }
 
 } // namespace AppSettings

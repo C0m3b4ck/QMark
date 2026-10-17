@@ -15,6 +15,8 @@ EN_HOWTO = [
     "What's the best way to {vp}?",
     "Can you tell me how to {vp}?",
     "Is there a way to {vp}?",
+    "Could you show me how to {vp}?",
+    "What are the steps to {vp}?",
 ]
 PL_HOWTO = [
     "Jak {vp}?",
@@ -27,6 +29,8 @@ EN_WHERE = [
     "Where can I find {np}?",
     "Where is {np}?",
     "How do I get to {np}?",
+    "Where do I find {np}?",
+    "How do I open {np}?",
 ]
 PL_WHERE = [
     "Gdzie znajdę {np}?",
@@ -311,63 +315,306 @@ def dedup_ex(exs):
             seen.add(key); out.append(e)
     return out
 
+PL_WORDS = re.compile(
+    r"\b(jak|jaki|jaka|jakie|sposób|gdzie|czy|możesz|mógłby|mnie|się|przedmiot|"
+    r"przedmioty|sprzedaż|sprzedać|sprzedawać|konto|konta|ustawienia|ustawić|"
+    r"polski|historia|historię|raport|raporty|baza|bazy|bazę|hasło|hasła|skaner|"
+    r"kopię|kopie|kopia|dziennik|waluta|walutę|półka|półki|półkę|kategoria|"
+    r"kategorie|status|stan|ilość|cenę|cena|rolę|rola|użytkownik|asystent|"
+    r"włączyć|wyłączyć|zmienić|dodać|usunąć|edytować|zobaczyć|przywrócić|"
+    r"skonfigurować|wyeksportować|zarządzać|przetestować|wysłać|utworzyć|"
+    r"wyjść|zamknąć|zalogować|wylogować|znajdę|znajdziesz|przejść|przejdź)\b",
+    re.IGNORECASE,
+)
+PL_CHARS = set("ąćęłńóśźż")
+
+
+def is_polish(text):
+    low = text.lower()
+    if any(ch in PL_CHARS for ch in low):
+        return True
+    return bool(PL_WORDS.search(low))
+
+
 def main():
-    dataset = []
+    dataset = []  # list of (lang, example)
     for ent in ENTRIES:
-        # EN
         for q in flatten_questions(ent):
-            a = ent.get("en_a_alt") if ent.get("use_alt") else ent.get("en_a")
-            a = ent.get("en_a") if a is None else a
-            dataset.append(make_example("en", q, a))
-        # PL
+            dataset.append(("en", make_example("en", q, ent.get("en_a"))))
         for q in flatten_questions_pl(ent):
-            a = ent.get("pl_a_alt") if ent.get("use_alt") else ent.get("pl_a")
-            a = ent.get("pl_a") if a is None else a
-            dataset.append(make_example("pl", q, a))
-    # refusals
+            dataset.append(("pl", make_example("pl", q, ent.get("pl_a"))))
+    # refusals (off-topic steering)
     for i, (qe, qp) in enumerate(REFUSALS_TOPICS):
         aen = REFUSAL_EN[i % len(REFUSAL_EN)]
         apl = REFUSAL_PL[i % len(REFUSAL_PL)]
-        dataset.append(make_example("en", qe, aen))
-        dataset.append(make_example("pl", qp, apl))
-    dataset = dedup_ex(dataset)
-    # shuffle
+        dataset.append(("en", make_example("en", qe, aen)))
+        dataset.append(("pl", make_example("pl", qp, apl)))
+
+    # dedup on (user, assistant)
+    seen, deduped = set(), []
+    for lang, e in dataset:
+        key = (e["messages"][1]["content"].strip().lower(),
+               e["messages"][2]["content"].strip().lower())
+        if key not in seen:
+            seen.add(key)
+            deduped.append((lang, e))
+    dataset = deduped
+
+    # safety: never let an eval prompt leak into training
+    train_qs = {e["messages"][1]["content"].strip().lower() for _, e in dataset}
+    leaks = [p["q"] for p in EVAL_PROMPTS if p["q"].strip().lower() in train_qs]
+    if leaks:
+        raise SystemExit("ERROR: eval prompt leaked into training set:\n" + "\n".join(leaks))
+
     random.shuffle(dataset)
-    # write
+
     out_train = Path(__file__).resolve().parent / "qmark_help.jsonl"
     with out_train.open("w", encoding="utf-8") as f:
-        for e in dataset:
+        for _, e in dataset:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    # eval
-    eval_out = []
-    for p in EVAL_PROMPTS:
-        eval_out.append(make_example(p["lang"], p["q"], p["a"]))
+
+    eval_out = [make_example(p["lang"], p["q"], p["a"]) for p in EVAL_PROMPTS]
     eval_out = dedup_ex(eval_out)
     with (Path(__file__).resolve().parent / "eval.jsonl").open("w", encoding="utf-8") as f:
         for e in eval_out:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    # stats
+
     n = len(dataset)
-    nen = sum(1 for e in dataset if e["messages"][1]["content"].strip() and any(ord(c) < 128 for c in e["messages"][1]["content"][:5]) and all(ord(c) < 200 for c in e["messages"][1]["content"][:50]))  # rough EN
-    # better count: detect language by chars? PL has ąćęłńóśźż
-    nen2 = 0
-    for e in dataset:
-        q = e["messages"][1]["content"]
-        if any(c in q.lower() for c in ["ć","ę","ł","ń","ó","ś","ź","ż","jak","gdzie","co "]):
-            pass  # PL
-        else:
-            # guess EN
-            nen2 += 1 if re.search(r"[a-zA-Z]", q) else 0
-    # better: count PL examples - those with Polish words
-    npl = 0
-    for e in dataset:
-        q = e["messages"][1]["content"]
-        if re.search(r"\b(jak|gdzie|co|czy|możesz|mnie|się|w|przedmiot|sprzedaż|konta|ustawienia|polski|historia|raport|bazy)\b", q.lower()):
-            npl += 1
-    nen_final = n - npl
-    if nen_final < 0: nen_final = 0
-    print(f"Wrote {n} training examples ({nen_final}/{npl} EN/PL ~ {nen_final/n*100:.1f}/{npl/n*100:.1f}%)")
+    nen = sum(1 for lang, _ in dataset if lang == "en")
+    npl = n - nen
+    print(f"Wrote {n} training examples ({nen}/{npl} EN/PL = {nen/n*100:.1f}/{npl/n*100:.1f}%)")
     print(f"Wrote {len(eval_out)} eval examples")
+    # cross-check the language labels against a text heuristic
+    mism = sum(1 for lang, e in dataset if is_polish(e["messages"][1]["content"]) != (lang == "pl"))
+    print(f"Language-label heuristic mismatches: {mism}")
+
+ENTRIES.extend([
+  # E Worklog
+  {"k": "enable_worklog", "kind": "howto", "en_vp": "enable the worklog", "pl_vp": "włączyć dziennik pracy",
+   "en_a": "Go to Tools -> Preferences, tick Enable Worklog (Worklog) and save. Once enabled, QMark writes per-session log files to a worklogs/ folder next to the program.",
+   "pl_a": "Przejdź do Narzędzia -> Ustawienia, zaznacz Dziennik pracy i zapisz. Po włączeniu QMark zapisuje pliki dziennika sesji w folderze worklogs/ obok programu."},
+  {"k": "worklog_stats", "kind": "howto", "en_vp": "view worklog statistics", "pl_vp": "zobaczyć statystyki dziennika pracy",
+   "en_a": "Go to Tools -> Worklog Statistics. It shows the current session's counts: items added/edited/removed, sales recorded, categories added/edited/removed, shelves added/edited/removed, and users added/edited/removed.",
+   "pl_a": "Przejdź do Narzędzia -> Statystyki dziennika. Pokazuje liczniki bieżącej sesji: dodane/edytowane/usunięte przedmioty, zarejestrowane sprzedaże, kategorie, półki i użytkownicy."},
+  {"k": "export_worklog", "kind": "howto", "en_vp": "export worklog statistics", "pl_vp": "wyeksportować statystyki dziennika",
+   "en_a": "On Tools -> Worklog Statistics, click Export to save the statistics as a text file.",
+   "pl_a": "W Narzędzia -> Statystyki dziennika kliknij Eksport, by zapisać statystyki jako plik tekstowy."},
+  # F Preferences details
+  {"k": "convert_prices", "kind": "howto", "en_vp": "convert all prices using a factor", "pl_vp": "przeliczyć wszystkie ceny za pomocą współczynnika",
+   "en_a": "A SuperAdmin opens Tools -> Preferences and clicks Convert All Prices. Enter a conversion factor (new price = old price × factor), e.g. 0.25 to convert from zł to USD. Adjust irregular items by hand afterwards.",
+   "pl_a": "SuperAdmin otwiera Narzędzia -> Ustawienia i klika Przelicz wszystkie ceny. Podaj współczynnik przeliczenia (nowa cena = stara cena × współczynnik), np. 0,25 przy przejściu z PLN na USD. Nietypowe przedmioty popraw ręcznie."},
+  {"k": "currency_change", "kind": "info", "en_q": ["Does changing currency convert prices?"], "pl_q": ["Czy zmiana waluty przelicza ceny?"], "en_a": "No. Changing the currency only changes the symbol. To convert prices, use Convert All Prices in Tools -> Preferences with a conversion factor.", "pl_a": "Nie. Zmiana waluty zmienia tylko symbol. Aby przeliczyć ceny, użyj Przelicz wszystkie ceny w Narzędzia -> Ustawienia z odpowiednim współczynnikiem."},
+  # Categories/shelves
+  {"k": "cats_shelves", "kind": "howto", "en_vp": "manage categories and shelves", "pl_vp": "zarządzać kategoriami i półkami",
+   "en_a": "Go to Items -> Manage Categories to add/edit/remove categories. Go to Items -> Manage Shelves to add/edit/remove shelves (locations). Both work similarly; categories can also be typed freely in the Add/Edit Item forms.",
+   "pl_a": "Przejdź do Przedmiotów -> Zarządzaj kategoriami, by dodawać/edytować/usuwać kategorie. Przejdź do Przedmiotów -> Zarządzaj półkami, by dodawać/edytować/usuwać półki. Obie funkcje działają podobnie; kategorie można też wpisywać swobodnie w formularzach Dodaj/Edytuj przedmiot."},
+  # Undo removed all
+  {"k": "restore_all", "kind": "howto", "en_vp": "restore all removed items", "pl_vp": "przywrócić wszystkie usunięte przedmioty",
+   "en_a": "Go to Items -> Undo Removed Items and click Undo All (Restore All) to restore all soft-deleted items at once.",
+   "pl_a": "Przejdź do Przedmioty -> Cofnij usunięte przedmioty i kliknij Cofnij wszystko (Przywróć wszystko), by przywrócić wszystkie usunięte przedmioty."},
+  # Sales history export details
+  {"k": "export_csv_where", "kind": "info", "en_q": ["Where does the CSV export go?"], "pl_q": ["Gdzie trafia wyeksportowany plik CSV?"], "en_a": "When you export from Sales History (Export CSV), you choose the location and filename; the default suggested name is sales_export.csv.",
+   "pl_a": "Eksportując z Historii sprzedaży (Eksportuj CSV), wybierasz lokalizację i nazwę pliku; domyślnie sugerowana nazwa to sales_export.csv."},
+  {"k": "csv_cols", "kind": "info", "en_q": ["What columns are in the sales CSV?"], "pl_q": ["Jakie kolumny są w pliku CSV sprzedaży?"], "en_a": "The exported CSV contains: Sale ID, Item ID, Quantity Sold, Unit Price, Total Amount, Sold By, Sale Date.",
+   "pl_a": "Wyeksportowany CSV zawiera: Sale ID, Item ID, Quantity Sold, Unit Price, Total Amount, Sold By, Sale Date."},
+  # Report export
+  {"k": "report_txt", "kind": "howto", "en_vp": "export the sales report as text", "pl_vp": "wyeksportować raport sprzedaży jako tekst",
+   "en_a": "In Sales -> Sales Report, first Generate Report, then click Export to save as a .txt file.",
+   "pl_a": "W Raporty -> Raport sprzedaży najpierw wygeneruj raport, potem kliknij Eksport, by zapisać jako plik .txt."},
+  {"k": "report_pdf_ts", "kind": "info", "en_q": ["Why does the PDF report have a timestamp in its name?"], "pl_q": ["Dlaczego nazwa PDF raportu zawiera znacznik czasu?"], "en_a": "The PDF export uses a timestamped filename (e.g. QMark_Report_YYYY-MM-DD_HHMMSS.pdf) so exports never overwrite each other.",
+   "pl_a": "Eksport PDF używa nazwy z datą i godziną (np. QMark_Report_YYYY-MM-DD_HHMMSS.pdf), by kolejne eksporty się nie nadpisywały."},
+  # Dashboard
+  {"k": "dashboard_btn", "kind": "info", "en_q": ["What does the big SELL/START SELLING button do?"], "pl_q": ["Co robi duży przycisk SPRZEDAJ/ROZPOCZNIJ SPRZEDAŻ?"], "en_a": "On the Dashboard, the START SELLING button jumps directly to the Sell (POS) page.",
+   "pl_a": "Na Pulpicie przycisk ROZPOCZNIJ SPRZEDAŻ przenosi bezpośrednio na stronę Sprzedaż (POS)."},
+  # Auto-update details
+  {"k": "update_check_now", "kind": "howto", "en_vp": "check for updates manually", "pl_vp": "ręcznie sprawdzić aktualizacje",
+   "en_a": "A SuperAdmin opens Tools -> Automation & Remote, goes to Auto-update and clicks Check for updates now. If a newer version is found, QMark asks whether to download and apply it, and restarts after installing.",
+   "pl_a": "SuperAdmin otwiera Narzędzia -> Automatyzacja i zdalny dostęp, przechodzi do Automatyczne aktualizacje i klika Sprawdź aktualizacje teraz. Jeśli znajdzie nowszą wersję, QMark pyta czy pobrać i zastosować; po instalacji uruchomi się ponownie."},
+  {"k": "restore_prev", "kind": "howto", "en_vp": "restore the previous release", "pl_vp": "przywrócić poprzednią wersję",
+   "en_a": "A SuperAdmin opens Tools -> Automation & Remote > Auto-update and clicks Restore previous release. This replaces the current program with the previous release and restarts. It only works if an update was installed at least once before.",
+   "pl_a": "SuperAdmin otwiera Narzędzia -> Automatyzacja i zdalny dostęp > Automatyczne aktualizacje i klika Przywróć poprzednią wersję. Zastąpi to bieżący program poprzednią wersją i uruchomi go ponownie — działa tylko jeśli aktualizacja była wcześniej zainstalowana."},
+  {"k": "auto_update_enable", "kind": "howto", "en_vp": "enable automatic update checks", "pl_vp": "włączyć automatyczne sprawdzanie aktualizacji",
+   "en_a": "A SuperAdmin goes to Tools -> Automation & Remote > Auto-update and ticks 'Enable automatic update checks from GitHub'. QMark checks for new releases on startup.",
+   "pl_a": "SuperAdmin przechodzi do Narzędzia -> Automatyzacja i zdalny dostęp > Automatyczne aktualizacje i zaznacza 'Włącz automatyczne sprawdzanie aktualizacji z GitHub'. QMark sprawdza nowe wydania przy uruchomieniu."},
+  # Telemetry details
+  {"k": "telemetry_enable", "kind": "howto", "en_vp": "enable telemetry", "pl_vp": "włączyć telemetrię",
+   "en_a": "A SuperAdmin can enable Telemetry on Tools -> Database Selection (or in Tools -> Preferences). It writes a .log and a SQLite .db into a telemetry/ folder next to the program; it stays local, is opt-in and can be turned off at any time.",
+   "pl_a": "SuperAdmin może włączyć Telemetrię w Narzędzia -> Wybór bazy danych (lub w Narzędzia -> Ustawienia). Telemetria zapisuje .log i bazę SQLite .db w folderze telemetry/ obok programu; dane są lokalne, opcjonalne i można je wyłączyć."},
+  {"k": "telemetry_folder", "kind": "info", "en_q": ["Where are telemetry files stored?"], "pl_q": ["Gdzie są przechowywane pliki telemetrii?"], "en_a": "Telemetry files are written to a telemetry/ folder next to the QMark executable (telemetry_<timestamp>.log and telemetry_<timestamp>.db).",
+   "pl_a": "Pliki telemetrii są zapisywane w folderze telemetry/ obok pliku wykonywalnego QMark (telemetry_<czas>.log i telemetry_<czas>.db)."},
+  # Backups
+  {"k": "backup_now", "kind": "howto", "en_vp": "create a backup now", "pl_vp": "wykonać kopię zapasową teraz",
+   "en_a": "A SuperAdmin goes to Tools -> Automation & Remote > Backups and clicks Back up now. The status shows the backup file created.",
+   "pl_a": "SuperAdmin przechodzi do Narzędzia -> Automatyzacja i zdalny dostęp > Kopie zapasowe i klika Wykonaj kopię teraz. Status pokaże utworzony plik kopii."},
+  {"k": "backup_sched", "kind": "howto", "en_vp": "set up scheduled backups", "pl_vp": "skonfigurować zaplanowane kopie zapasowe",
+   "en_a": "In Tools -> Automation & Remote > Backups, tick Scheduled backup, set the time of day, set 'Keep last N backups' (default 10), and optionally enable sending copies by e-mail or HTTP PUT. The program must be running at the scheduled time.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Kopie zapasowe zaznacz Planowana kopia zapasowa, ustaw godzinę, 'Zachowaj ostatnich N kopii' (domyślnie 10) i opcjonalnie włącz wysyłkę e-mailem lub HTTP PUT. Program musi działać o zaplanowanej porze."},
+  {"k": "backup_folder_set", "kind": "howto", "en_vp": "change the backup folder", "pl_vp": "zmienić folder kopii zapasowych",
+   "en_a": "In Tools -> Automation & Remote > Backups, set the Backup folder. Backups are ZIP files of the databases.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Kopie zapasowe ustaw Folder kopii. Kopie są zapisane jako archiwa ZIP z bazami danych."},
+  {"k": "backup_keep", "kind": "howto", "en_vp": "keep only the last N backups", "pl_vp": "zachować tylko ostatnie N kopii zapasowych",
+   "en_a": "In Tools -> Automation & Remote > Backups, set 'Keep last N backups' (default 10). Older archives are pruned automatically.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Kopie zapasowe ustaw 'Zachowaj ostatnich N kopii' (domyślnie 10). Starsze archiwa są usuwane automatycznie."},
+  {"k": "backup_http", "kind": "howto", "en_vp": "upload backups to a custom server via HTTP PUT", "pl_vp": "przesyłać kopie zapasowe na własny serwer przez HTTP PUT",
+   "en_a": "In Tools -> Automation & Remote > Backups, tick 'Upload a copy to a custom server (HTTP PUT)', enter the Server URL (optionally with {filename} placeholder) and an optional Bearer token.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Kopie zapasowe zaznacz 'Prześlij kopię na własny serwer (HTTP PUT)', podaj URL serwera (opcjonalnie z {filename}) i opcjonalny token Bearer."},
+  {"k": "backup_email", "kind": "howto", "en_vp": "send backup copies by e-mail", "pl_vp": "wysyłać kopie zapasowe e-mailem",
+   "en_a": "In Tools -> Automation & Remote > Backups, tick 'Send a copy online via e-mail'. The recipients configured in the E-mail summary section receive the backup.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Kopie zapasowe zaznacz 'Wyślij kopię online e-mailem'. Kopie trafią do odbiorców z sekcji Podsumowanie e-mail."},
+  # Email
+  {"k": "test_email", "kind": "howto", "en_vp": "send a test e-mail", "pl_vp": "wysłać testowy e-mail",
+   "en_a": "In Tools -> Automation & Remote > E-mail summary, configure SMTP and recipients, then click Send test e-mail. QMark reports whether it sent the test.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Podsumowanie e-mail skonfiguruj SMTP i odbiorców, następnie kliknij Wyślij testową wiadomość. QMark potwierdzi, czy test został wysłany."},
+  {"k": "smtp_modes", "kind": "info", "en_q": ["Which SMTP security modes are supported?"], "pl_q": ["Jakie tryby zabezpieczeń SMTP są obsługiwane?"], "en_a": "QMark supports STARTTLS (587), Implicit TLS (465) and Plaintext (25). Choose the one your e-mail provider requires and set the matching port.",
+   "pl_a": "QMark obsługuje STARTTLS (587), Implicit TLS (465) i Plaintext (25). Wybierz tryb wymagany przez Twojego dostawcę i ustaw odpowiedni port."},
+  {"k": "email_recip", "kind": "howto", "en_vp": "set e-mail recipients", "pl_vp": "ustawić odbiorców e-maila",
+   "en_a": "In Tools -> Automation & Remote > E-mail summary, list recipients one per line in the 'Recipients (one per line)' field.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Podsumowanie e-mail wpisz odbiorców po jednym w każdej linii w polu 'Odbiorcy (jeden na linię)'."},
+  # Diagnostics
+  {"k": "diagnostics", "kind": "howto", "en_vp": "export diagnostics", "pl_vp": "wyeksportować diagnostykę",
+   "en_a": "Go to Tools -> Troubleshoot and click Export Diagnostics. QMark saves a timestamped diagnostics_<timestamp>.txt file with the date, DB connection, login state, user, role, telemetry/worklog on/off, currency and language.",
+   "pl_a": "Przejdź do Narzędzia -> Rozwiązywanie problemów i kliknij Eksportuj diagnostykę. QMark zapisze plik diagnostics_<czas>.txt z datą, połączeniem DB, stanem zalogowania, użytkownikiem, rolą, telemetrią/dziennikiem, walutą i językiem."},
+  {"k": "logs_folder", "kind": "info", "en_q": ["Where are the program logs?"], "pl_q": ["Gdzie są pliki logów programu?"], "en_a": "In Tools -> Troubleshoot, click View Logs — it shows that log files are stored in the folder where QMark runs.",
+   "pl_a": "W Narzędzia -> Rozwiązywanie problemów kliknij Pokaż logi — zostanie pokazana lokalizacja folderu z plikami logów (folder, z którego uruchamiany jest QMark)."},
+  {"k": "test_db", "kind": "howto", "en_vp": "test the database connection", "pl_vp": "przetestować połączenie z bazą danych",
+   "en_a": "Go to Tools -> Troubleshoot and click Test DB Connection. QMark reports whether it can reach the databases.",
+   "pl_a": "Przejdź do Narzędzia -> Rozwiązywanie problemów i kliknij Testuj połączenie DB. QMark pokaże, czy połączenie z bazami danych działa."},
+])
+
+# Add more entries for other features
+ENTRIES.extend([
+  # Add/Edit/Remove extras
+  {"k": "autogen_id", "kind": "howto", "en_vp": "let QMark auto-generate an item ID", "pl_vp": "niech QMark automatycznie wygeneruje ID przedmiotu",
+   "en_a": "On the Add Item page, tick 'Auto-generate ID'. If you want a custom ID, untick it and type the ID; click Check ID to confirm it's available.",
+   "pl_a": "Na stronie Dodaj przedmiot zaznacz 'Generuj ID automatycznie'. Jeśli chcesz własne ID, odznacz to pole, wpisz ID i kliknij 'Sprawdź ID', by sprawdzić, czy jest wolne."},
+  {"k": "check_id", "kind": "howto", "en_vp": "check if an item ID is available", "pl_vp": "sprawdzić, czy ID przedmiotu jest dostępne",
+   "en_a": "On the Add Item page, enter an ID and click Check ID. QMark reports 'ID is available' or 'ID already exists'.",
+   "pl_a": "Na stronie Dodaj przedmiot wpisz ID i kliknij 'Sprawdź ID'. QMark pokaże 'ID jest dostępne' lub 'ID już istnieje'."},
+  {"k": "search_edit", "kind": "howto", "en_vp": "search for an item to edit", "pl_vp": "szukać przedmiotu do edycji",
+   "en_a": "Go to Items -> Edit Item. Use the search box and optionally the field dropdown (All, Name, Category, Shelf, Status) to find the item, then click it to load it into the form.",
+   "pl_a": "Przejdź do Przedmioty -> Edytuj przedmiot. Użyj pola szukania i opcjonalnie listy pól (Wszystkie, Nazwa, Kategoria, Półka, Status), by znaleźć przedmiot, a następnie kliknij go, by załadować do formularza."},
+  {"k": "undo_last_removed", "kind": "howto", "en_vp": "restore the last removed item", "pl_vp": "przywrócić ostatnio usunięty przedmiot",
+   "en_a": "On the Remove Item page, click Undo Last to restore the most recently removed item.",
+   "pl_a": "Na stronie Usuń przedmiot kliknij 'Cofnij ostatnie', by przywrócić ostatnio usunięty przedmiot."},
+  {"k": "remove_sales_remain", "kind": "info", "en_q": ["If I remove an item, do past sales remain?"], "pl_q": ["Czy usunięcie przedmiotu kasuje jego dawne sprzedaże?"], "en_a": "No. Removing an item is a soft delete; past sales remain in the sales history and reports. The item is moved to the removed area and can be restored.",
+   "pl_a": "Nie. Usunięcie przedmiotu jest 'miękkie' — dawne sprzedaże pozostają w historii sprzedaży i raportach. Przedmiot trafia do obszaru usuniętych i można go przywrócić."},
+  # Scanner extras
+  {"k": "scanner_add_id", "kind": "info", "en_q": ["When I scan on Add Item, where does the code go?"], "pl_q": ["Gdy skanuję na stronie Dodaj przedmiot, gdzie trafia kod?"], "en_a": "With scanner mode enabled, scanning on the Add Item page fills the ID field (not the name field). Scanning a code that already exists opens that item on the Edit page.",
+   "pl_a": "Przy włączonym trybie skanera skanowanie na stronie Dodaj przedmiot wpisuje kod do pola ID (nie nazwy). Skanowanie kodu, który już istnieje, otwiera ten przedmiot na stronie Edytuj."},
+  {"k": "scanner_login_req", "kind": "info", "en_q": ["Why does it say 'Scanning requires login'?"], "pl_q": ["Dlaczego widzę 'Skanowanie wymaga zalogowania'?"], "en_a": "You must be logged in for scanner mode to sell items. Scanner mode also must be enabled by a SuperAdmin in Tools -> Automation & Remote.",
+   "pl_a": "Musisz być zalogowany, by skaner sprzedawał przedmioty. Tryb skanera musi być też włączony przez SuperAdmina w Narzędzia -> Automatyzacja i zdalny dostęp."},
+  {"k": "scanner_keyboard", "kind": "info", "en_q": ["Can the scanner break the keyboard?"], "pl_q": ["Czy skaner może zepsuć klawiaturę?"], "en_a": "No. QMark is designed so scanner input is detected but never consumes characters; the focused field receives every key normally, including when scanning.",
+   "pl_a": "Nie. QMark jest zaprojektowany tak, by wejście ze skanera było wykrywane, ale nie przechwytywało znaków — aktywne pole zawsze odbiera wszystkie klawisze normalnie."},
+  # Sales report extras
+  {"k": "report_charts", "kind": "info", "en_q": ["What charts does the sales report show?"], "pl_q": ["Jakie wykresy są w raporcie sprzedaży?"], "en_a": "The report shows a pie chart of top selling items (top 8 + 'Other') and a bar chart of shop activity by hour of day.",
+   "pl_a": "Raport pokazuje wykres kołowy najlepiej sprzedających się przedmiotów (top 8 + 'Inne') oraz wykres słupkowy aktywności sklepu wg godziny."},
+  {"k": "report_contents", "kind": "info", "en_q": ["What information is in the sales report?"], "pl_q": ["Jakie informacje zawiera raport sprzedaży?"], "en_a": "Totals, stock overview, today's statistics, trends for the last 7 days, top selling items (top 5), top sellers (top 3), and low-stock items needing replenishment.",
+   "pl_a": "Sumy, przegląd magazynu, dzisiejsze statystyki, trendy z ostatnich 7 dni, najlepiej sprzedające się przedmioty (top 5), najlepsi sprzedawcy (top 3) oraz lista przedmiotów o niskim stanie do uzupełnienia."},
+  {"k": "simple_view_pos", "kind": "howto", "en_vp": "see today's statistics on the Sell page", "pl_vp": "zobaczyć dzisiejsze statystyki na stronie Sprzedaż",
+   "en_a": "On the Sell page, tick 'Simple view' to replace the sales log with today's statistics: sales, revenue, items sold and per-product lines (up to 15). Untick to return to the sales log.",
+   "pl_a": "Na stronie Sprzedaż zaznacz 'Widok prosty', by zamiast dziennika sprzedaży zobaczyć dzisiejsze statystyki: sprzedaż, przychód, sprzedane sztuki i linie per produkt (do 15). Odznacz, by wrócić do dziennika."},
+   # G Troubleshooting
+   {"k": "trouble_scanner", "kind": "trouble", "en_q": ["The barcode scanner is not selling my items", "My scanner stopped working in QMark"], "pl_q": ["Skaner nie sprzedaje moich przedmiotów", "Mój skaner przestał działać w QMark"], "en_a": "Check three things: (1) a SuperAdmin enabled scanner mode in Tools -> Automation & Remote, (2) you are logged in — otherwise the status bar says 'Scanning requires login.', and (3) the scanner behaves as a USB/HID keyboard wedge that ends each scan with Enter. If it still does nothing, the code may match no item and QMark reports 'Scanned code not found'.", "pl_a": "Sprawdź trzy rzeczy: (1) SuperAdmin włączył tryb skanera w Narzędzia -> Automatyzacja i zdalny dostęp, (2) jesteś zalogowany — w przeciwnym razie pasek stanu pokaże 'Skanowanie wymaga zalogowania', oraz (3) skaner działa jako klawiatura USB/HID kończąca skan klawiszem Enter. Jeśli nadal nic się nie dzieje, kod może nie pasować do żadnego przedmiotu i QMark pokaże 'Nie znaleziono kodu'."},
+   {"k": "trouble_remote", "kind": "trouble", "en_q": ["My remote dashboard will not open in the browser"], "pl_q": ["Mój zdalny pulpit nie otwiera się w przeglądarce"], "en_a": "Make sure the remote dashboard is enabled in Tools -> Automation & Remote, the port (default 8080) is not blocked by a firewall, the access token is at least 16 characters long, and you open the exact URL http://<computer-name>:8080/?token=<your-token> from the same trusted network. QMark must be running.", "pl_a": "Upewnij się, że zdalny pulpit jest włączony w Narzędzia -> Automatyzacja i zdalny dostęp, port (domyślnie 8080) nie jest blokowany przez zaporę, token dostępu ma co najmniej 16 znaków, a Ty otwierasz dokładny adres http://<nazwa-komputera>:8080/?token=<twój-token> z tej samej zaufanej sieci. QMark musi być uruchomiony."},
+   {"k": "trouble_email", "kind": "trouble", "en_q": ["The e-mail summary is not arriving in my inbox"], "pl_q": ["Podsumowanie e-mail nie dociera do skrzynki"], "en_a": "In Tools -> Automation & Remote > E-mail summary, check the SMTP host, port and security mode (STARTTLS 587, Implicit TLS 465, Plaintext 25), the sender username/password, and that recipients are listed one per line. Click Send test e-mail to get a precise error. Scheduled summaries are sent only while QMark is running.", "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Podsumowanie e-mail sprawdź serwer SMTP, port i tryb zabezpieczeń (STARTTLS 587, Implicit TLS 465, Plaintext 25), nazwę użytkownika/hasło nadawcy oraz to, czy odbiorcy są wpisani po jednym w linii. Kliknij Wyślij testową wiadomość, by uzyskać konkretny błąd. Zaplanowane podsumowania są wysyłane tylko, gdy QMark działa."},
+   {"k": "trouble_backup", "kind": "trouble", "en_q": ["The scheduled backup did not run"], "pl_q": ["Zaplanowana kopia zapasowa nie została wykonana"], "en_a": "Scheduled backups run only while QMark is open, so the program must be running at the set time. Check that 'Scheduled backup' is ticked, the time of day is correct, and the Backup folder exists and is writable. Press Back up now to test a manual backup immediately.", "pl_a": "Zaplanowane kopie zapasowe działają tylko, gdy QMark jest otwarty, więc program musi działać o wybranej godzinie. Sprawdź, czy zaznaczono 'Planowana kopia zapasowa', czy godzina jest poprawna oraz czy folder kopii istnieje i można do niego zapisywać. Naciśnij Wykonaj kopię teraz, by przetestować ręczną kopię."},
+   {"k": "trouble_keybinds", "kind": "trouble", "en_q": ["The Alt+ keyboard shortcuts stopped selling items"], "pl_q": ["Skróty Alt+ przestały sprzedawać przedmioty"], "en_a": "Check that 'Enable sell keybinds' is ticked in Tools -> Preferences (on by default). The shortcuts are captured at the application level, so they still work while the search box has focus. Remember that Alt+key combinations already used by the menu bar are skipped, so those cards show no badge.", "pl_a": "Sprawdź, czy w Narzędzia -> Ustawienia zaznaczono 'Włącz skróty klawiszowe sprzedaży' (domyślnie włączone). Skróty są przechwytywane na poziomie aplikacji, więc działają też, gdy pole szukania ma fokus. Pamiętaj, że kombinacje Alt+ używane już przez menu są pomijane, więc te karty nie mają odznaki."},
+   {"k": "trouble_prices", "kind": "trouble", "en_q": ["Prices did not change after I switched the currency"], "pl_q": ["Ceny nie zmieniły się po zmianie waluty"], "en_a": "Changing the currency in Tools -> Preferences only changes the symbol; it does not convert amounts. To actually convert, a SuperAdmin uses Convert All Prices there and enters a factor (new price = old price x factor). Adjust irregular items by hand afterwards.", "pl_a": "Zmiana waluty w Narzędzia -> Ustawienia zmienia tylko symbol — nie przelicza kwot. Aby naprawdę przeliczyć, SuperAdmin używa tam opcji Przelicz wszystkie ceny i podaje współczynnik (nowa cena = stara cena x współczynnik). Nietypowe przedmioty popraw potem ręcznie."},
+   {"k": "trouble_nologin", "kind": "trouble", "en_q": ["I forgot my password and cannot log in"], "pl_q": ["Nie pamiętam hasła i nie mogę się zalogować"], "en_a": "There is no password recovery by design. Ask a SuperAdmin to set a new password in Tools -> Accounts. If the SuperAdmin password itself is lost, restore an earlier users.db backup or install fresh and register a new SuperAdmin.", "pl_a": "Mechanizm odzyskiwania hasła celowo nie istnieje. Poproś SuperAdmina o ustawienie nowego hasła w Narzędzia -> Konta. Jeśli utracone zostało samo hasło SuperAdmina, przywróć wcześniejszą kopię users.db albo zainstaluj program od nowa i zarejestruj nowego SuperAdmina."},
+])
+
+# ---------------------------------------------------------------------------
+# Feature-absence + explicit UI-term coverage.
+# Absence claims are grounded in src/translations.h (the exhaustive UI string
+# inventory, which contains none of these terms) and the docs.
+# ---------------------------------------------------------------------------
+ENTRIES.extend([
+  {"k": "no_receipt", "kind": "info",
+   "en_q": ["Does QMark support receipt printers?", "Can I print a receipt for a sale?", "Is there any way to print receipts in QMark?"],
+   "pl_q": ["Czy QMark obsługuje drukarki paragonów?", "Czy mogę wydrukować paragon ze sprzedaży?", "Czy w QMark da się drukować paragony?"],
+   "en_a": "No — QMark does not have receipt printing and does not connect to receipt printers. Sales are saved in the database; to review or export them open Sales -> Sales History (Export CSV) or Sales -> Sales Report (Export / Export PDF).",
+   "pl_a": "Nie — QMark nie obsługuje drukowania paragonów i nie łączy się z drukarkami paragonów. Sprzedaże są zapisywane w bazie danych; aby je przejrzeć lub wyeksportować, otwórz Raporty -> Historia sprzedaży (Eksportuj CSV) albo Raporty -> Raport sprzedaży (Eksport / Eksport PDF)."},
+  {"k": "no_invoice", "kind": "info",
+   "en_q": ["Can QMark create invoices?", "Does QMark generate VAT invoices?"],
+   "pl_q": ["Czy QMark wystawia faktury?", "Czy QMark tworzy faktury VAT?"],
+   "en_a": "No, QMark does not create invoices — it has no invoicing feature. It is a simple point-of-sale for school shops that records sales you can see in Sales -> Sales History and export with Export CSV.",
+   "pl_a": "Nie, QMark nie wystawia faktur — nie ma funkcji fakturowania. To prosty system sprzedaży dla sklepików szkolnych, który zapisuje sprzedaże widoczne w Raporty -> Historia sprzedaży i eksportowalne przez Eksportuj CSV."},
+  {"k": "no_online_shop", "kind": "info",
+   "en_q": ["Does QMark have an online shop?", "Can customers order online through QMark?"],
+   "pl_q": ["Czy QMark ma sklep internetowy?", "Czy klienci mogą zamawiać online przez QMark?"],
+   "en_a": "No. QMark has no online shop or web storefront — it is a desktop program used by staff at the till (the Sell page). It does have a SuperAdmin remote dashboard and online backup upload, but no online selling.",
+   "pl_a": "Nie. QMark nie ma sklepu internetowego ani witryny WWW — to program desktopowy używany przez personel przy kasie (strona Sprzedaż). Ma natomiast zdalny pulpit SuperAdmina i wysyłkę kopii online, ale nie sprzedaż online."},
+  {"k": "no_loyalty", "kind": "info",
+   "en_q": ["Does QMark support customer loyalty cards?", "Can I track customer loyalty points in QMark?"],
+   "pl_q": ["Czy QMark obsługuje karty lojalnościowe klientów?", "Czy mogę zbierać punkty lojalnościowe w QMark?"],
+   "en_a": "No. QMark has no customer accounts, loyalty cards or points. Sales are anonymous; only the selling user's username is recorded in the sales log.",
+   "pl_a": "Nie. QMark nie ma kont klientów, kart lojalnościowych ani punktów. Sprzedaże są anonimowe — w dzienniku sprzedaży zapisywana jest tylko nazwa sprzedawcy."},
+  {"k": "no_purchase_orders", "kind": "info",
+   "en_q": ["Can I order stock from suppliers in QMark?", "Does QMark manage suppliers or purchase orders?"],
+   "pl_q": ["Czy mogę zamawiać towar od dostawców w QMark?", "Czy QMark zarządza dostawcami lub zamówieniami?"],
+   "en_a": "No. QMark does not manage suppliers or purchase orders. To increase stock, open Items -> Resupply and use the -10/-5/-1/+1/+5/+10 buttons, or type an exact value and click APPLY.",
+   "pl_a": "Nie. QMark nie zarządza dostawcami ani zamówieniami. Aby zwiększyć stan, otwórz Przedmioty -> Dostawa i użyj przycisków -10/-5/-1/+1/+5/+10 albo wpisz dokładną wartość i kliknij ZASTOSUJ."},
+  {"k": "no_mobile_app", "kind": "info",
+   "en_q": ["Is there a QMark mobile app?", "Can I use QMark on a phone or tablet?"],
+   "pl_q": ["Czy istnieje aplikacja mobilna QMark?", "Czy mogę używać QMark na telefonie lub tablecie?"],
+   "en_a": "There is no QMark mobile app. QMark is a desktop program for Windows and Linux. It is touch-friendly, so it runs on a touchscreen computer, but it is not a phone or tablet app.",
+   "pl_a": "Nie ma aplikacji mobilnej QMark. QMark to program desktopowy na Windows i Linux. Jest przyjazny dla dotyku, więc działa na komputerze z ekranem dotykowym, ale nie jest aplikacją na telefon czy tablet."},
+  {"k": "no_multi_currency", "kind": "info",
+   "en_q": ["Can QMark show prices in two currencies at the same time?", "Can I use several currencies in QMark?"],
+   "pl_q": ["Czy QMark może pokazywać ceny w dwóch walutach jednocześnie?", "Czy mogę używać kilku walut w QMark?"],
+   "en_a": "No. QMark uses one currency at a time, set in Tools -> Preferences (Currency). Changing it only changes the symbol; to convert existing amounts use Convert All Prices... (SuperAdmin).",
+   "pl_a": "Nie. QMark używa jednej waluty naraz, ustawianej w Narzędzia -> Ustawienia (Waluta). Zmiana zmienia tylko symbol; aby przeliczyć istniejące kwoty, użyj Przelicz wszystkie ceny... (SuperAdmin)."},
+  {"k": "altx_what", "kind": "info",
+   "en_q": ["What does Alt+X do?", "Is there a keyboard shortcut to undo the last sale?", "What is the Alt+X shortcut for?"],
+   "pl_q": ["Co robi Alt+X?", "Czy jest skrót klawiszowy do cofnięcia ostatniej sprzedaży?", "Do czego służy skrót Alt+X?"],
+   "en_a": "Alt+X on the Sell page undoes the last sale straight away: the stock is restored, the item's status is updated and the sale is removed from the sales log. It works when Enable sell keybinds is on in Tools -> Preferences (on by default).",
+   "pl_a": "Alt+X na stronie Sprzedaż natychmiast cofa ostatnią sprzedaż: stan jest przywracany, status przedmiotu aktualizowany, a sprzedaż usuwana z dziennika. Działa, gdy w Narzędzia -> Ustawienia włączone są skróty klawiszowe sprzedaży (domyślnie tak)."},
+  {"k": "simple_view_what", "kind": "info",
+   "en_q": ["What is Simple view on the Sell page?", "How do I see a quick summary of today's sales?", "What does the Simple view checkbox show?"],
+   "pl_q": ["Co to jest Widok prosty na stronie Sprzedaż?", "Jak zobaczyć szybkie podsumowanie dzisiejszej sprzedaży?", "Co pokazuje pole Widok prosty?"],
+   "en_a": "Tick 'Simple view (show today's statistics)' on the Sell page to replace the sales log with today's numbers: number of sales, revenue, items sold and per-product lines (up to 15). Untick it to return to the sales log.",
+   "pl_a": "Zaznacz 'Widok prosty (pokaż dzisiejsze statystyki)' na stronie Sprzedaż, by zamiast dziennika zobaczyć dzisiejsze liczby: liczbę sprzedaży, przychód, sprzedane sztuki i linie per produkt (do 15). Odznacz, by wrócić do dziennika."},
+  {"k": "delete_account_what", "kind": "info",
+   "en_q": ["Can a SuperAdmin delete an account?", "Is there a way to delete a user in QMark?", "Why does Delete Account not work?"],
+   "pl_q": ["Czy SuperAdmin może usunąć konto?", "Czy w QMark da się usunąć użytkownika?", "Dlaczego przycisk Usuń konto nie działa?"],
+   "en_a": "Account deletion is not implemented in the current version: even a SuperAdmin cannot delete an account, and the button shows 'Account deletion not yet implemented.' Instead, change the password in Tools -> Accounts or leave the account unused.",
+   "pl_a": "Usuwanie kont nie jest zaimplementowane w tej wersji: nawet SuperAdmin nie usunie konta, a przycisk pokazuje 'Usuwanie konta nie zostało jeszcze zaimplementowane'. Zamiast tego zmień hasło w Narzędzia -> Konta albo zostaw konto nieużywane."},
+  {"k": "move_program_what", "kind": "info",
+   "en_q": ["Which files should I copy to move QMark to a new computer?", "Can I run QMark from a USB drive with my data?"],
+   "pl_q": ["Które pliki skopiować, by przenieść QMark na nowy komputer?", "Czy mogę uruchomić QMark z pendrive'a z danymi?"],
+   "en_a": "QMark keeps its data in items.db and users.db in the program folder. To move or back up the shop, copy the QMark program together with those two files. If you changed their paths in Tools -> Database Selection, copy the files from there instead.",
+   "pl_a": "QMark przechowuje dane w plikach items.db i users.db w folderze programu. Aby przenieść lub zabezpieczyć sklep, skopiuj program QMark wraz z tymi dwoma plikami. Jeśli zmieniłeś ich ścieżki w Narzędzia -> Wybór bazy danych, skopiuj pliki stamtąd."},
+  {"k": "currency_convert_what", "kind": "info",
+   "en_q": ["Will switching the currency recalculate my prices?", "I changed the currency but the prices are the same — why?"],
+   "pl_q": ["Czy zmiana waluty przeliczy moje ceny?", "Zmieniłem walutę, ale ceny się nie zmieniły — dlaczego?"],
+   "en_a": "Changing the currency only changes the symbol shown, not the amounts. A SuperAdmin must use Convert All Prices... in Tools -> Preferences and enter a factor (new price = old price x factor). Fix irregular items by hand afterwards.",
+   "pl_a": "Zmiana waluty zmienia tylko wyświetlany symbol, nie kwoty. SuperAdmin musi użyć opcji Przelicz wszystkie ceny... w Narzędzia -> Ustawienia i podać współczynnik (nowa cena = stara cena x współczynnik). Nietypowe przedmioty popraw potem ręcznie."},
+  {"k": "backup_attach_what", "kind": "info",
+   "en_q": ["Can the e-mail summary include a database backup?", "How do I add a backup to the daily summary?"],
+   "pl_q": ["Czy podsumowanie e-mail może zawierać kopię bazy?", "Jak dodać kopię do dziennego podsumowania?"],
+   "en_a": "Yes. In Tools -> Automation & Remote > E-mail summary, tick 'Attach database backup to each summary'. Each summary will then include a ZIP of the databases.",
+   "pl_a": "Tak. W Narzędzia -> Automatyzacja i zdalny dostęp > Podsumowanie e-mail zaznacz 'Dołącz kopię zapasową bazy do każdego podsumowania'. Każde podsumowanie będzie zawierać archiwum ZIP z bazami."},
+  {"k": "restore_prev_what", "kind": "info",
+   "en_q": ["What is Restore previous release for?", "How does Restore previous release work?"],
+   "pl_q": ["Do czego służy Przywróć poprzednią wersję?", "Jak działa Przywróć poprzednią wersję?"],
+   "en_a": "In Tools -> Automation & Remote > Auto-update, Restore previous release replaces the current program with the previously installed release and restarts it. It only works if an update was installed at least once before.",
+   "pl_a": "W Narzędzia -> Automatyzacja i zdalny dostęp > Automatyczne aktualizacje opcja Przywróć poprzednią wersję zastępuje bieżący program poprzednio zainstalowaną wersją i uruchamia go ponownie. Działa tylko, jeśli wcześniej zainstalowano aktualizację."},
+  {"k": "keybind_badge_what", "kind": "info",
+   "en_q": ["Why do some item cards have no keyboard shortcut badge?", "Some cards show no Alt shortcut — why?"],
+   "pl_q": ["Dlaczego niektóre karty nie mają odznaki skrótu klawiszowego?", "Niektóre karty nie pokazują skrótu Alt — dlaczego?"],
+   "en_a": "Sell keybinds use Alt+number and Alt+letter. Letters already taken by the menu bar (a menu's accelerator letter) are skipped, so those cards get no badge. This is normal and does not affect selling.",
+   "pl_a": "Skróty sprzedaży używają Alt+cyfra i Alt+litera. Litery zajęte już przez pasek menu (litera akceleratora menu) są pomijane, więc te karty nie dostają odznaki. To normalne i nie wpływa na sprzedaż."},
+  {"k": "scanner_trigger_what", "kind": "info",
+   "en_q": ["The scanner reads a code but nothing is sold — what can I check?", "Why does scanning not sell the item?"],
+   "pl_q": ["Skaner czyta kod, ale nic się nie sprzedaje — co sprawdzić?", "Dlaczego skanowanie nie sprzedaje przedmiotu?"],
+   "en_a": "Check that scanner mode is enabled by a SuperAdmin in Tools -> Automation & Remote, that you are logged in (otherwise the status bar shows 'Scanning requires login.'), and that the scanner ends each scan with Enter. If the code matches no item, QMark reports 'Scanned code not found'.",
+   "pl_a": "Sprawdź, czy tryb skanera jest włączony przez SuperAdmina w Narzędzia -> Automatyzacja i zdalny dostęp, czy jesteś zalogowany (inaczej pasek stanu pokaże 'Skanowanie wymaga zalogowania') oraz czy skaner kończy skan klawiszem Enter. Jeśli kod nie pasuje do żadnego przedmiotu, QMark pokaże 'Nie znaleziono kodu'."},
+  {"k": "hedge_unknown_feature", "kind": "info",
+   "en_q": ["Does QMark support printing to a kitchen printer?", "Can QMark send SMS notifications?"],
+   "pl_q": ["Czy QMark obsługuje drukarkę kuchenną?", "Czy QMark wysyła powiadomienia SMS?"],
+   "en_a": "I don't have that as a QMark feature, and I won't guess. If it is not in the Items, Sell, Sales or Tools menus it is not built in. For diagnostics open Tools -> Troubleshoot; e-mail and backup options are in Tools -> Automation & Remote.",
+   "pl_a": "Nie mam tego jako funkcji QMark i nie będę zgadywać. Jeśli nie ma tego w menu Przedmioty, Sprzedaż, Raporty lub Narzędzia, to nie jest wbudowane. Do diagnostyki otwórz Narzędzia -> Rozwiązywanie problemów; opcje e-mail i kopii są w Narzędzia -> Automatyzacja i zdalny dostęp."},
+])
 
 if __name__ == "__main__":
     main()

@@ -210,6 +210,8 @@ echo "[5/7] Compiling QMark sources..."
 QMARK_SRCS=(
     backup.cpp
     businesslogic.cpp
+    assistant.cpp
+    assistantdialog.cpp
     crypto.cpp
     main.cpp
     mainwindow.cpp
