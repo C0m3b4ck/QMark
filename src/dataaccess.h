@@ -75,6 +75,24 @@ public:
     virtual bool updateUser(const Domain::User& user) = 0;
     virtual std::vector<Domain::User> getAllUsers() = 0;
 
+    // Permission templates, assignments and grants (stored in the users DB).
+    virtual std::vector<Domain::PermissionTemplate> getAllPermissionTemplates() = 0;
+    virtual bool savePermissionTemplate(const Domain::PermissionTemplate& tpl) = 0;
+    virtual bool removePermissionTemplate(const std::string& id) = 0;
+
+    virtual std::vector<Domain::TemplateAssignment> getAllTemplateAssignments() = 0;
+    virtual bool setTemplateAssignment(const std::string& subjectType,
+                                       const std::string& subjectId,
+                                       const std::string& templateId) = 0;
+    virtual bool clearTemplateAssignment(const std::string& subjectType,
+                                         const std::string& subjectId) = 0;
+
+    virtual std::vector<Domain::FeatureGrant> getAllFeatureGrants() = 0;
+    virtual bool setFeatureGrant(const Domain::FeatureGrant& grant) = 0;
+    virtual bool clearFeatureGrant(const std::string& subjectType,
+                                   const std::string& subjectId,
+                                   const std::string& feature) = 0;
+
     // ID checking
     virtual bool checkIdExists(const std::string& entityType, const std::string& id) = 0;
 

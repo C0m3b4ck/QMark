@@ -60,6 +60,7 @@ SOURCES += \
     sqlite_dataaccess.cpp \
     summaryreport.cpp \
     updater.cpp \
+    permissions.cpp \
     zipwriter.cpp
 
 HEADERS += \
@@ -76,6 +77,7 @@ HEADERS += \
     mainwindow.h \
     netutil.h \
     pdf_export.h \
+    permissions.h \
     remoteserver.h \
     scannerdetect.h \
     smtpclient.h \

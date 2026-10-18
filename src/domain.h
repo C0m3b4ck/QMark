@@ -208,6 +208,35 @@ struct User {
     }
 };
 
+// ── Permissions: templates, grants and assignments ────────────────
+// A SuperAdmin can enable individual *features* for a whole role or for
+// a single user. Two complementary mechanisms are supported:
+//   * named templates — reusable bundles of feature keys that can be
+//     assigned to a role or a user in one step;
+//   * direct grants — an explicit allow/deny for one feature on one
+//     subject, which overrides any template.
+//
+// A subject is a ("user", username) or ("role", role-number-as-text)
+// pair, so the storage stays language independent.
+struct PermissionTemplate {
+    std::string id;
+    std::string name;
+    std::vector<std::string> features;   // feature keys (see permissions.h)
+};
+
+struct FeatureGrant {
+    std::string subjectType;   // "user" | "role"
+    std::string subjectId;     // username, or the role number as text
+    std::string feature;       // feature key
+    bool enabled = true;       // allow (true) or deny (false)
+};
+
+struct TemplateAssignment {
+    std::string subjectType;   // "user" | "role"
+    std::string subjectId;
+    std::string templateId;
+};
+
 // ── Undo Entry ────────────────────────────────────────────────────
 
 struct UndoEntry {

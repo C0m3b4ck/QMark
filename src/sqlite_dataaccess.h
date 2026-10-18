@@ -65,6 +65,22 @@ public:
     bool updateUser(const Domain::User& user) override;
     std::vector<Domain::User> getAllUsers() override;
 
+    // Permission templates, assignments and grants
+    std::vector<Domain::PermissionTemplate> getAllPermissionTemplates() override;
+    bool savePermissionTemplate(const Domain::PermissionTemplate& tpl) override;
+    bool removePermissionTemplate(const std::string& id) override;
+    std::vector<Domain::TemplateAssignment> getAllTemplateAssignments() override;
+    bool setTemplateAssignment(const std::string& subjectType,
+                               const std::string& subjectId,
+                               const std::string& templateId) override;
+    bool clearTemplateAssignment(const std::string& subjectType,
+                                 const std::string& subjectId) override;
+    std::vector<Domain::FeatureGrant> getAllFeatureGrants() override;
+    bool setFeatureGrant(const Domain::FeatureGrant& grant) override;
+    bool clearFeatureGrant(const std::string& subjectType,
+                           const std::string& subjectId,
+                           const std::string& feature) override;
+
     // ID checking
     bool checkIdExists(const std::string& entityType, const std::string& id) override;
 

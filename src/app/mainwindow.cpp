@@ -15,6 +15,7 @@
 #include "assistantdialog.h"
 #include "backup.h"
 #include "netutil.h"
+#include "permissions.h"
 #include "remoteserver.h"
 #include "smtpclient.h"
 #include "summaryreport.h"
@@ -29,6 +30,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QGroupBox>
+#include <QHeaderView>
+#include <QTableWidget>
 #include <QPlainTextEdit>
 #include <QRadioButton>
 #include <QTimeEdit>
@@ -426,11 +429,13 @@ MainWindow::MainWindow(DataAccess::IDataAccess& db, QWidget *parent)
     // dedicated Scanner menu (toggle / settings / rescan).
     setupScannerAccess();
 
-    // Optional on-device help assistant, reachable from the Help menu.
+    // Help + feature permissions
     setupHelpMenu();
+    setupPermissionsAccess();
 
     // ── Build Automation & Remote page (appended after resupply) ─
     m_automationPage = buildAutomationPage();
+    m_permissionsPage = buildPermissionsPage();
 
     // ── Remote dashboard: bring up if enabled by the SuperAdmin ─
     startRemoteServerIfEnabled();
@@ -675,11 +680,40 @@ void MainWindow::goToPage(int index)
     resetScannerBurst();
 
     if (m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::UserRole) {
-        // Clerks keep the POS page and the deposit (kaucja) page; every
-        // other page is reserved for Admin/SuperAdmin.
-        const int depositIdx = (m_depositPage && ui->stackedWidget)
-            ? ui->stackedWidget->indexOf(m_depositPage) : -1;
-        if (index != 0 && index != 6 && index != depositIdx) return; // clerk: blocked
+        // Clerks may only reach pages they have been granted. The POS and
+        // deposit (kaucja) pages are always allowed; every other page is
+        // mapped to the feature that unlocks it. This means a SuperAdmin
+        // can hand a clerk, say, resupply or item management without
+        // promoting them to Admin.
+        bool allowed = (index == 0 || index == 6);
+
+        if (!allowed && m_depositPage && ui->stackedWidget->indexOf(m_depositPage) == index)
+            allowed = true;
+
+        if (!allowed && m_resupplyPage && ui->stackedWidget->indexOf(m_resupplyPage) == index)
+            allowed = Permissions::can(m_db, m_currentUser.value(), Permissions::Feature::Resupply);
+
+        if (!allowed && m_currentUser.has_value()) {
+            Permissions::Feature feature = Permissions::Feature::ItemsManage;
+            bool mapped = true;
+            switch (index) {
+                case 2: case 3: case 4: case 5:
+                    feature = Permissions::Feature::ItemsManage; break;
+                case 7:
+                    feature = Permissions::Feature::CategoriesManage; break;
+                case 8:
+                    feature = Permissions::Feature::ShelvesManage; break;
+                case 9: case 10:
+                    feature = Permissions::Feature::ReportsView; break;
+                case 14:
+                    feature = Permissions::Feature::WorklogView; break;
+                default:
+                    mapped = false; break;
+            }
+            if (mapped) allowed = Permissions::can(m_db, m_currentUser.value(), feature);
+        }
+
+        if (!allowed) return; // clerk: page not granted
     }
 
     // No leftover credentials: clear the form fields every time the
@@ -719,23 +753,64 @@ void MainWindow::goToPage(int index)
 // login). menuAction()->setVisible() toggles the button only.
 void MainWindow::applyRoleRestrictions()
 {
-    bool clerk = m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::UserRole;
-    bool superAdmin = m_isLoggedIn && getCurrentUserRole() == Domain::User::Role::SuperAdmin;
+    const bool loggedIn = m_isLoggedIn;
+    const bool clerk = loggedIn && getCurrentUserRole() == Domain::User::Role::UserRole;
+    const bool superAdmin = loggedIn && getCurrentUserRole() == Domain::User::Role::SuperAdmin;
 
-    if (ui->menuItems) ui->menuItems->menuAction()->setVisible(!clerk);
-    if (ui->menuSales) ui->menuSales->menuAction()->setVisible(!clerk);
-    if (ui->menuTools) ui->menuTools->menuAction()->setVisible(!clerk);
+    auto allowed = [&](Permissions::Feature f) -> bool {
+        if (!loggedIn || !m_currentUser.has_value()) return true; // pre-login
+        return Permissions::can(m_db, m_currentUser.value(), f);
+    };
+
+    // ── Items menu ──
+    if (ui->menuItems) {
+        const bool aResupply = allowed(Permissions::Feature::Resupply);
+        const bool aItems    = allowed(Permissions::Feature::ItemsManage);
+        const bool aCats     = allowed(Permissions::Feature::CategoriesManage);
+        const bool aShelves  = allowed(Permissions::Feature::ShelvesManage);
+        if (ui->actionResupply)           ui->actionResupply->setVisible(aResupply);
+        if (ui->actionAdd_Items)          ui->actionAdd_Items->setVisible(aItems);
+        if (ui->actionEdit_Items)         ui->actionEdit_Items->setVisible(aItems);
+        if (ui->actionRemove_Items)       ui->actionRemove_Items->setVisible(aItems);
+        if (ui->actionUndo_Removed_Items) ui->actionUndo_Removed_Items->setVisible(aItems);
+        if (ui->actionManage_Categories)  ui->actionManage_Categories->setVisible(aCats);
+        if (ui->actionManage_Shelves)     ui->actionManage_Shelves->setVisible(aShelves);
+        ui->menuItems->menuAction()->setVisible(loggedIn ? (aResupply || aItems || aCats || aShelves) : true);
+    }
+
+    // ── Sales menu ──
+    if (ui->menuSales) {
+        const bool aRep = allowed(Permissions::Feature::ReportsView);
+        if (ui->actionSales_History) ui->actionSales_History->setVisible(aRep);
+        if (ui->actionMake_Report)   ui->actionMake_Report->setVisible(aRep);
+        ui->menuSales->menuAction()->setVisible(loggedIn ? aRep : true);
+    }
+
+    // ── Tools menu ──
+    if (ui->menuTools) {
+        const bool canWorklog = allowed(Permissions::Feature::WorklogView);
+        if (ui->actionWorklogStats)         ui->actionWorklogStats->setVisible(canWorklog);
+        if (ui->actionTroubleshoot)         ui->actionTroubleshoot->setVisible(!clerk);
+        if (ui->actionAccounts)             ui->actionAccounts->setVisible(!clerk);
+        if (ui->actionPreferences)          ui->actionPreferences->setVisible(!clerk);
+        if (ui->actionDatabase_Selection)   ui->actionDatabase_Selection->setVisible(!clerk);
+        if (ui->actionCreate_Database)      ui->actionCreate_Database->setVisible(!clerk);
+        if (ui->actionAutomation)           ui->actionAutomation->setVisible(superAdmin);
+        ui->menuTools->menuAction()->setVisible(loggedIn ? (!clerk || canWorklog) : true);
+    }
+
     if (ui->menuSell) ui->menuSell->menuAction()->setVisible(true);
-    if (ui->menuLanguage) ui->menuLanguage->menuAction()->setVisible(true); // all roles
+    if (ui->menuLanguage) ui->menuLanguage->menuAction()->setVisible(true);
     if (ui->menuFile) {
         if (ui->actionLog_in) ui->actionLog_in->setVisible(!clerk);
         if (ui->actionRegister) ui->actionRegister->setVisible(!clerk);
     }
-    // The automation & remote settings page is SuperAdmin-only.
-    if (ui->actionAutomation) {
-        ui->actionAutomation->setVisible(superAdmin);
-    }
+
+    // SuperAdmin-only actions/pages
+    if (ui->actionAutomation) ui->actionAutomation->setVisible(superAdmin);
+    if (m_actionPermissions) m_actionPermissions->setVisible(superAdmin);
 }
+
 
 // Retranslate the whole window (menus, actions, static widgets and the
 // dynamically built resupply/first-run pages).
@@ -747,8 +822,7 @@ void MainWindow::applyLanguageToUi()
     if (m_resupplyPage) Tr::applyLanguage(m_resupplyPage);
     if (m_depositPage) Tr::applyLanguage(m_depositPage);
     if (m_firstRunPage) Tr::applyLanguage(m_firstRunPage);
-    if (m_automationPage) Tr::applyLanguage(m_automationPage);
-    updatePricePlaceholders();
+    if (m_permissionsPage) Tr::applyLanguage(m_permissionsPage);
     syncLanguageUi();
     // Dashboard calendar follows the UI language, too.
     if (ui->calendarDashboard) {
@@ -864,6 +938,27 @@ Domain::User::Role MainWindow::getCurrentUserRole() const
 {
     if (m_currentUser.has_value()) return m_currentUser->role;
     return Domain::User::Role::UserRole;
+}
+
+// Feature-level gate. Falls back to the role default when no explicit
+// template/grant applies (so behaviour is unchanged until a SuperAdmin
+// grants or denies something).
+bool MainWindow::checkFeature(Permissions::Feature feature)
+{
+    if (!m_isLoggedIn) {
+        QMessageBox::information(this, Tr::trS("Login Required"), Tr::trS("Please log in first."));
+        return false;
+    }
+    if (!m_currentUser.has_value()) return false;
+
+    if (!Permissions::can(m_db, m_currentUser.value(), feature)) {
+        const Permissions::FeatureInfo* fi = Permissions::info(feature);
+        QString name = fi ? Tr::trS(fi->name) : Tr::trS("This feature");
+        QMessageBox::warning(this, Tr::trS("Access Denied"),
+            Tr::trS("You do not have permission to use: ") + name);
+        return false;
+    }
+    return true;
 }
 
 void MainWindow::setCurrentUser(const Domain::User& user) { m_currentUser = user; }
@@ -1065,13 +1160,13 @@ void MainWindow::on_actionRegister_triggered()
 
 void MainWindow::on_actionAdd_Items_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     goToPage(2); // Add Item page
 }
 
 void MainWindow::on_btnAdd_item_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
 
     QString name = ui->txtName_item->text().trimmed();
     QString quantity = ui->txtQuantity_item->text().trimmed();
@@ -1152,7 +1247,7 @@ void MainWindow::on_txtId_item_textChanged(const QString &text)
 
 void MainWindow::on_actionEdit_Items_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     goToPage(3); // Edit Item page
     on_btnSearch_item_edit_clicked();   // autopopulate the list
 }
@@ -1215,7 +1310,7 @@ void MainWindow::loadItemToEdit(const QString& id)
 
 void MainWindow::on_btnEdit_item_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
 
     // Preserve original createdAt from the loaded item
     QString id = ui->txtId_item_edit->text().trimmed();
@@ -1258,7 +1353,7 @@ void MainWindow::on_btnClear_id_item_edit_clicked() { ui->txtId_item_edit->clear
 
 void MainWindow::on_actionRemove_Items_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     goToPage(4); // Remove Item page
     on_btnSearch_item_remove_clicked(); // autopopulate the list
 }
@@ -1292,7 +1387,7 @@ void MainWindow::on_lstSearch_item_remove_itemClicked(QListWidgetItem *item)
 
 void MainWindow::on_btnRemove_item_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
 
     QString id = ui->txtId_item_remove->text().trimmed();
     QString name = ui->txtName_item_remove->text().trimmed();
@@ -1312,14 +1407,14 @@ void MainWindow::on_btnRemove_item_clicked()
 
 void MainWindow::on_btnUndoRemove_item_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     goToPage(5); // Undo removed page
     refreshRemovedItemsList(); // never show an empty page
 }
 
 void MainWindow::on_btnUndoLast_item_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     auto removed = m_db.getRemovedItems();
     if (!removed.empty()) {
         QString id = QString::fromStdString(removed.front().id);
@@ -1350,7 +1445,7 @@ void MainWindow::refreshRemovedItemsList()
 
 void MainWindow::on_actionUndo_Removed_Items_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     goToPage(5);
     refreshRemovedItemsList();
 }
@@ -1366,7 +1461,7 @@ void MainWindow::on_lstSearch_undoremoved_itemClicked(QListWidgetItem *item)
 
 void MainWindow::on_btnUndoSelected_undoremoved_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     auto selected = ui->lstSearch_undoremoved->currentItem();
     if (selected) {
         QString id = selected->data(Qt::UserRole).toString();
@@ -1379,7 +1474,7 @@ void MainWindow::on_btnUndoSelected_undoremoved_clicked()
 
 void MainWindow::on_btnUndoAll_undoremoved_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ItemsManage)) return;
     auto removed = m_db.getRemovedItems();
     int count = 0;
     for (const auto& item : removed) {
@@ -1476,7 +1571,7 @@ void MainWindow::on_lstRecentSales_itemClicked(QListWidgetItem *item)
 
 void MainWindow::on_actionResupply_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::Resupply)) return;
     if (m_resupplyPage && ui->stackedWidget) {
         goToPage(ui->stackedWidget->indexOf(m_resupplyPage));
     }
@@ -2178,6 +2273,7 @@ void MainWindow::on_btnRefreshSalesLog_sell_clicked()
 void MainWindow::on_btnUndoSale_sell_clicked()
 {
     if (!checkLoginRequired()) return;
+    if (!checkFeature(Permissions::Feature::SalesUndo)) return;
 
     auto sales = m_db.getAllSales();
     if (sales.empty()) {
@@ -2553,7 +2649,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 
 void MainWindow::on_actionManage_Categories_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::CategoriesManage)) return;
     goToPage(7); // Categories page
     auto cats = m_db.getAllCategories();
     ui->lstSearch_category->clear();
@@ -2572,7 +2668,7 @@ void MainWindow::on_lstSearch_category_itemClicked(QListWidgetItem *item)
 
 void MainWindow::on_btnAdd_category_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::CategoriesManage)) return;
     QString name = ui->txtName_category->text().trimmed();
     QString id = QString::number(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
@@ -2593,7 +2689,7 @@ void MainWindow::on_btnAdd_category_clicked()
 
 void MainWindow::on_btnEdit_category_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::CategoriesManage)) return;
     DTO::CategoryDTO dto;
     dto.id = ui->txtId_category->text().trimmed().toStdString();
     dto.name = ui->txtName_category->text().trimmed().toStdString();
@@ -2610,7 +2706,7 @@ void MainWindow::on_btnEdit_category_clicked()
 
 void MainWindow::on_btnRemove_category_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::CategoriesManage)) return;
     QString id = ui->txtId_category->text().trimmed();
     if (QMessageBox::question(this, Tr::trS("Confirm"), Tr::trS("Remove this category?")) == QMessageBox::Yes) {
         if (m_db.removeCategory(id.toStdString())) {
@@ -2633,7 +2729,7 @@ void MainWindow::on_btnUndoRemove_category_clicked() { on_actionManage_Categorie
 
 void MainWindow::on_actionManage_Shelves_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ShelvesManage)) return;
     goToPage(8); // Shelves page
     auto shelves = m_db.getAllShelves();
     ui->lstSearch_shelf->clear();
@@ -2652,7 +2748,7 @@ void MainWindow::on_lstSearch_shelf_itemClicked(QListWidgetItem *item)
 
 void MainWindow::on_btnAdd_shelf_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ShelvesManage)) return;
     QString name = ui->txtName_shelf->text().trimmed();
     QString id = QString::number(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
@@ -2673,7 +2769,7 @@ void MainWindow::on_btnAdd_shelf_clicked()
 
 void MainWindow::on_btnEdit_shelf_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ShelvesManage)) return;
     DTO::ShelfDTO dto;
     dto.id = ui->txtId_shelf->text().trimmed().toStdString();
     dto.name = ui->txtName_shelf->text().trimmed().toStdString();
@@ -2690,7 +2786,7 @@ void MainWindow::on_btnEdit_shelf_clicked()
 
 void MainWindow::on_btnRemove_shelf_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ShelvesManage)) return;
     QString id = ui->txtId_shelf->text().trimmed();
     if (QMessageBox::question(this, Tr::trS("Confirm"), Tr::trS("Remove this shelf?")) == QMessageBox::Yes) {
         if (m_db.removeShelf(id.toStdString())) {
@@ -2713,7 +2809,7 @@ void MainWindow::on_btnUndoRemove_shelf_clicked() { on_actionManage_Shelves_trig
 
 void MainWindow::on_actionSales_History_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ReportsView)) return;
     goToPage(9); // Sales History page
     on_btnRefresh_sales_clicked();
 }
@@ -2801,13 +2897,13 @@ void MainWindow::on_btnExport_sales_clicked()
 
 void MainWindow::on_actionMake_Report_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ReportsView)) return;
     goToPage(10); // Report page
 }
 
 void MainWindow::on_btnGenerateReport_clicked()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::ReportsView)) return;
 
     // All aggregation and report formatting live in the GUI-independent
     // Stats engine (statistics.h); the data layer also persists a daily
@@ -3268,7 +3364,7 @@ void MainWindow::on_chkWorklog_toggled(bool checked)
 
 void MainWindow::on_actionWorklogStats_triggered()
 {
-    if (!checkRoleRequired(BusinessLogic::RequiredRole::Admin)) return;
+    if (!checkFeature(Permissions::Feature::WorklogView)) return;
     goToPage(14); // Worklog page
     on_btnRefreshWorklog_clicked();
 }
@@ -3374,12 +3470,294 @@ void MainWindow::on_btnExportDiagnostics_clicked()
     QMessageBox::information(this, Tr::trS("Export Diagnostics"), Tr::trS("Diagnostics exported."));
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Automation & Remote (scanner / e-mail / backups / auto-update /
-// remote dashboard). All network + disk work runs on worker threads;
-// GUI updates are marshalled back through QMetaObject::invokeMethod
-// with a QPointer guard so a closing window can never crash us.
-// ═══════════════════════════════════════════════════════════════════
+void MainWindow::refreshPermissionsPage()
+{
+    if (!m_permissionsPage) return;
+    m_applyingPermissionsUi = true;
+
+    // Subject combo
+    m_permUi.cboSubject->clear();
+    if (m_permUi.cboSubjectType->currentIndex() == 0) {
+        m_permUi.cboSubject->addItem(Tr::trS("Clerk (1)"), QString::fromStdString(Permissions::roleId(Domain::User::Role::UserRole)));
+        m_permUi.cboSubject->addItem(Tr::trS("Admin (2)"), QString::fromStdString(Permissions::roleId(Domain::User::Role::Admin)));
+        m_permUi.cboSubject->addItem(Tr::trS("SuperAdmin (3)"), QString::fromStdString(Permissions::roleId(Domain::User::Role::SuperAdmin)));
+    } else {
+        for (auto& u : m_db.getAllUsers()) {
+            m_permUi.cboSubject->addItem(QString::fromStdString(u.username), QString::fromStdString(u.username));
+        }
+    }
+
+    m_permUi.cboAssignSubject->clear();
+    if (m_permUi.cboAssignType->currentIndex() == 0) {
+        m_permUi.cboAssignSubject->addItem(Tr::trS("Clerk (1)"), QString::fromStdString(Permissions::roleId(Domain::User::Role::UserRole)));
+        m_permUi.cboAssignSubject->addItem(Tr::trS("Admin (2)"), QString::fromStdString(Permissions::roleId(Domain::User::Role::Admin)));
+        m_permUi.cboAssignSubject->addItem(Tr::trS("SuperAdmin (3)"), QString::fromStdString(Permissions::roleId(Domain::User::Role::SuperAdmin)));
+    } else {
+        for (auto& u : m_db.getAllUsers()) {
+            m_permUi.cboAssignSubject->addItem(QString::fromStdString(u.username), QString::fromStdString(u.username));
+        }
+    }
+
+    // Templates
+    {
+        auto tpls = m_db.getAllPermissionTemplates();
+        m_permUi.cboTemplate->clear();
+        m_permUi.cboTemplate->addItem(Tr::trS("(new template)"), QString(""));
+        for (auto& t : tpls) m_permUi.cboTemplate->addItem(QString::fromStdString(t.name), QString::fromStdString(t.id));
+        m_permUi.cboAssignTemplate->clear();
+        m_permUi.cboAssignTemplate->addItem(Tr::trS("(choose template)"), QString(""));
+        for (auto& t : tpls) m_permUi.cboAssignTemplate->addItem(QString::fromStdString(t.name), QString::fromStdString(t.id));
+    }
+
+    m_permUi.tblFeatures->setRowCount(0);
+    const int sidx = m_permUi.cboSubject->currentIndex();
+    if (sidx >= 0) {
+        std::string st = (m_permUi.cboSubjectType->currentIndex() == 0) ? Permissions::SubjectRole : Permissions::SubjectUser;
+        QString sidv = m_permUi.cboSubject->itemData(sidx).toString();
+        Domain::User dummy;
+        dummy.username = (st == Permissions::SubjectUser ? sidv.toStdString() : "dummy");
+        dummy.role = Permissions::roleFromId(sidv.toStdString(), Domain::User::Role::UserRole);
+        auto res = Permissions::resolveAll(m_db, dummy);
+        auto grants = m_db.getAllFeatureGrants();
+
+        int r = 0;
+        for (const auto& fi : Permissions::registry()) {
+            auto it = res.find(fi.key);
+            m_permUi.tblFeatures->insertRow(r);
+            m_permUi.tblFeatures->setItem(r, 0, new QTableWidgetItem(Tr::trS(fi.name)));
+            QComboBox* cmb = new QComboBox();
+            cmb->addItem(Tr::trS("Use default"), "default");
+            cmb->addItem(Tr::trS("Allow"), "allow");
+            cmb->addItem(Tr::trS("Deny"), "deny");
+            bool hasGrant = false;
+            for (auto& g : grants) if (g.subjectType == st && g.subjectId == sidv.toStdString() && g.feature == fi.key) { hasGrant = true; cmb->setCurrentIndex(g.enabled ? 1 : 2); break; }
+            if (!hasGrant) cmb->setCurrentIndex(0);
+            m_permUi.tblFeatures->setCellWidget(r, 1, cmb);
+            QString src;
+            if (it != res.end()) {
+                switch (it->second.source) {
+                    case Permissions::Source::RoleTemplate: src = Tr::trS("Role template"); break;
+                    case Permissions::Source::UserTemplate: src = Tr::trS("User template"); break;
+                    case Permissions::Source::RoleGrant: src = Tr::trS("Role grant"); break;
+                    case Permissions::Source::UserGrant: src = Tr::trS("User grant"); break;
+                    default: src = Tr::trS("Default"); break;
+                }
+            }
+            m_permUi.tblFeatures->setItem(r, 2, new QTableWidgetItem(src));
+            connect(cmb, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, st, sidv, fi](int idx){
+                if (m_applyingPermissionsUi) return;
+                if (idx == 0) m_db.clearFeatureGrant(st, sidv.toStdString(), fi.key);
+                else if (idx == 1) m_db.setFeatureGrant(Domain::FeatureGrant{st, sidv.toStdString(), fi.key, true});
+                else if (idx == 2) m_db.setFeatureGrant(Domain::FeatureGrant{st, sidv.toStdString(), fi.key, false});
+                refreshPermissionsPage();
+            });
+            r++;
+        }
+    }
+
+    {
+        int at = m_permUi.cboAssignType->currentIndex();
+        int asub = m_permUi.cboAssignSubject->currentIndex();
+        if (asub >= 0) {
+            std::string st = at == 0 ? Permissions::SubjectRole : Permissions::SubjectUser;
+            QString sidv = m_permUi.cboAssignSubject->itemData(asub).toString();
+            auto assigns = m_db.getAllTemplateAssignments();
+            auto tpls = m_db.getAllPermissionTemplates();
+            QString assigned;
+            for (auto& a : assigns) if (a.subjectType == st && a.subjectId == sidv.toStdString()) {
+                for (auto& t : tpls) if (t.id == a.templateId) { assigned = QString::fromStdString(t.name); break; }
+                break;
+            }
+            m_permUi.lblAssignInfo->setText(assigned.isEmpty() ? Tr::trS("No template assigned") : (Tr::trS("Assigned template: ") + assigned));
+        }
+    }
+
+    m_permUi.tblFeatures->resizeColumnsToContents();
+    m_applyingPermissionsUi = false;
+}
+
+
+QWidget* MainWindow::buildPermissionsPage()
+{
+    QWidget* page = new QWidget();
+    page->setObjectName("permissionsPage");
+    QVBoxLayout* mainLayout = new QVBoxLayout(page);
+    mainLayout->setSpacing(10);
+    mainLayout->setContentsMargins(15, 10, 15, 10);
+
+    // ── Top bar ──
+    QFrame* topBar = new QFrame();
+    topBar->setMaximumHeight(60);
+    topBar->setStyleSheet("background: #0078d4;");
+    QHBoxLayout* topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(15, 0, 15, 0);
+
+    QPushButton* btnBack = new QPushButton(Tr::trS("← Back"));
+    btnBack->setStyleSheet(
+        "QPushButton { color: white; background: transparent; border: none; "
+        "font-size: 14px; font-weight: bold; padding: 5px 10px; }"
+        "QPushButton:hover { background: rgba(255,255,255,0.15); border-radius: 4px; }");
+    btnBack->setCursor(Qt::PointingHandCursor);
+    topLayout->addWidget(btnBack);
+    QLabel* title = new QLabel(Tr::trS("Permissions"));
+    title->setStyleSheet("color: white; font-size: 16px; font-weight: bold;");
+    topLayout->addWidget(title);
+    topLayout->addStretch();
+    mainLayout->addWidget(topBar);
+
+    connect(btnBack, &QPushButton::clicked, this, [this]() { goToPage(1); });
+
+    QScrollArea* scroll = new QScrollArea();
+    scroll->setWidgetResizable(true);
+    QWidget* body = new QWidget();
+    QVBoxLayout* bodyLayout = new QVBoxLayout(body);
+    bodyLayout->setSpacing(12);
+
+    // Group A: Direct permissions for a role or user
+    {
+        QGroupBox* g = new QGroupBox(Tr::trS("Permissions for a role or a user"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+        QHBoxLayout* row = new QHBoxLayout();
+        m_permUi.cboSubjectType = new QComboBox();
+        m_permUi.cboSubjectType->addItem(Tr::trS("Whole role"));
+        m_permUi.cboSubjectType->addItem(Tr::trS("Specific user"));
+        m_permUi.cboSubject = new QComboBox();
+        m_permUi.cboSubject->setMinimumWidth(200);
+        QPushButton* btnRefresh = new QPushButton(Tr::trS("Refresh"));
+        row->addWidget(new QLabel(Tr::trS("Subject:")));
+        row->addWidget(m_permUi.cboSubjectType);
+        row->addWidget(m_permUi.cboSubject);
+        row->addWidget(btnRefresh);
+        row->addStretch();
+        v->addLayout(row);
+
+        m_permUi.tblFeatures = new QTableWidget();
+        m_permUi.tblFeatures->setColumnCount(3);
+        QStringList h; h << Tr::trS("Feature") << Tr::trS("Setting") << Tr::trS("Source");
+        m_permUi.tblFeatures->setHorizontalHeaderLabels(h);
+        m_permUi.tblFeatures->horizontalHeader()->setStretchLastSection(true);
+        m_permUi.tblFeatures->verticalHeader()->setVisible(false);
+        m_permUi.tblFeatures->setSelectionMode(QAbstractItemView::SingleSelection);
+        v->addWidget(m_permUi.tblFeatures);
+
+        m_permUi.lblSubjectInfo = new QLabel();
+        m_permUi.lblSubjectInfo->setStyleSheet("color: #666; font-size: 11px;");
+        v->addWidget(m_permUi.lblSubjectInfo);
+
+        connect(btnRefresh, &QPushButton::clicked, this, [this]() { refreshPermissionsPage(); });
+        connect(m_permUi.cboSubjectType, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]() { refreshPermissionsPage(); });
+        connect(m_permUi.cboSubject, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]() { refreshPermissionsPage(); });
+
+        bodyLayout->addWidget(g);
+    }
+
+    // Group B: Templates
+    {
+        QGroupBox* g = new QGroupBox(Tr::trS("Templates"));
+        QVBoxLayout* v = new QVBoxLayout(g);
+        QHBoxLayout* r1 = new QHBoxLayout();
+        m_permUi.cboTemplate = new QComboBox();
+        m_permUi.cboTemplate->setMinimumWidth(200);
+        QPushButton* btnNew = new QPushButton(Tr::trS("New"));
+        m_permUi.btnTemplateDelete = new QPushButton(Tr::trS("Delete"));
+        r1->addWidget(new QLabel(Tr::trS("Template:")));
+        r1->addWidget(m_permUi.cboTemplate);
+        r1->addWidget(btnNew);
+        r1->addWidget(m_permUi.btnTemplateDelete);
+        r1->addStretch();
+        v->addLayout(r1);
+
+        QHBoxLayout* r2 = new QHBoxLayout();
+        r2->addWidget(new QLabel(Tr::trS("Name:")));
+        m_permUi.txtTemplateName = new QLineEdit();
+        r2->addWidget(m_permUi.txtTemplateName, 1);
+        v->addLayout(r2);
+
+        QGridLayout* grid = new QGridLayout();
+        for (size_t i = 0; i < Permissions::registry().size(); ++i) {
+            const auto& fi = Permissions::registry()[i];
+            QCheckBox* chk = new QCheckBox(Tr::trS(fi.name));
+            chk->setProperty("featureKey", QString::fromStdString(fi.key));
+            m_permUi.chkTemplateFeatures.push_back(chk);
+            grid->addWidget(chk, static_cast<int>(i/2), static_cast<int>(i%2));
+        }
+        v->addLayout(grid);
+
+        m_permUi.btnTemplateSave = new QPushButton(Tr::trS("Save template"));
+        m_permUi.btnTemplateSave->setMinimumHeight(36);
+        v->addWidget(m_permUi.btnTemplateSave);
+
+        QHBoxLayout* r3 = new QHBoxLayout();
+        r3->addWidget(new QLabel(Tr::trS("Assign to:")));
+        m_permUi.cboAssignType = new QComboBox();
+        m_permUi.cboAssignType->addItem(Tr::trS("Whole role"));
+        m_permUi.cboAssignType->addItem(Tr::trS("Specific user"));
+        m_permUi.cboAssignSubject = new QComboBox();
+        m_permUi.cboAssignSubject->setMinimumWidth(200);
+        m_permUi.cboAssignTemplate = new QComboBox();
+        m_permUi.cboAssignTemplate->setMinimumWidth(200);
+        QPushButton* btnAssign = new QPushButton(Tr::trS("Assign"));
+        QPushButton* btnClear = new QPushButton(Tr::trS("Clear"));
+        r3->addWidget(m_permUi.cboAssignType);
+        r3->addWidget(m_permUi.cboAssignSubject);
+        r3->addWidget(m_permUi.cboAssignTemplate);
+        r3->addWidget(btnAssign);
+        r3->addWidget(btnClear);
+        r3->addStretch();
+        v->addLayout(r3);
+
+        m_permUi.lblAssignInfo = new QLabel();
+        m_permUi.lblAssignInfo->setStyleSheet("color: #666; font-size: 11px;");
+        v->addWidget(m_permUi.lblAssignInfo);
+
+        connect(btnNew, &QPushButton::clicked, this, [this]() { refreshPermissionsPage(); /* simple: clear name */ m_permUi.txtTemplateName->clear(); for(auto* c:m_permUi.chkTemplateFeatures)c->setChecked(false); });
+        connect(m_permUi.btnTemplateDelete, &QPushButton::clicked, this, [this]() {
+            int idx = m_permUi.cboTemplate->currentIndex();
+            if(idx<=0) return;
+            QString id=m_permUi.cboTemplate->itemData(idx).toString();
+            if(!id.isEmpty()) { m_db.removePermissionTemplate(id.toStdString()); refreshPermissionsPage(); }
+        });
+        connect(m_permUi.btnTemplateSave, &QPushButton::clicked, this, [this]() {
+            int tidx = m_permUi.cboTemplate->currentIndex();
+            std::string tid = (tidx>0)? m_permUi.cboTemplate->itemData(tidx).toString().toStdString() : ("tpl_"+QDateTime::currentDateTime().toString("yyyyMMddhhmmsszzz").toStdString());
+            Domain::PermissionTemplate tpl;
+            tpl.id = tid;
+            tpl.name = m_permUi.txtTemplateName->text().trimmed().toStdString();
+            for(auto* c:m_permUi.chkTemplateFeatures) if(c->isChecked()) tpl.features.push_back(c->property("featureKey").toString().toStdString());
+            m_db.savePermissionTemplate(tpl);
+            refreshPermissionsPage();
+        });
+        connect(m_permUi.cboTemplate, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]() {
+            int idx=m_permUi.cboTemplate->currentIndex();
+            if(idx<=0){ m_permUi.txtTemplateName->clear(); for(auto*c:m_permUi.chkTemplateFeatures)c->setChecked(false); return; }
+            QString id=m_permUi.cboTemplate->itemData(idx).toString();
+            for(auto& t:m_db.getAllPermissionTemplates()) {
+                if(QString::fromStdString(t.id)==id){ m_permUi.txtTemplateName->setText(QString::fromStdString(t.name)); for(auto*c:m_permUi.chkTemplateFeatures)c->setChecked(false); for(auto&fk:t.features) { for(auto*c:m_permUi.chkTemplateFeatures) if(c->property("featureKey").toString().toStdString()==fk){ c->setChecked(true); break; } } break; }
+            }
+        });
+        connect(btnAssign, &QPushButton::clicked, this, [this]() {
+            int at=m_permUi.cboAssignType->currentIndex(); int asub=m_permUi.cboAssignSubject->currentIndex(); int atpl=m_permUi.cboAssignTemplate->currentIndex();
+            if(atpl<=0) return;
+            std::string st= at==0 ? Permissions::SubjectRole : Permissions::SubjectUser;
+            QString sid=m_permUi.cboAssignSubject->itemData(asub).toString();
+            QString tid=m_permUi.cboAssignTemplate->itemData(atpl).toString();
+            if(!sid.isEmpty()&&!tid.isEmpty()){ m_db.setTemplateAssignment(st,sid.toStdString(),tid.toStdString()); refreshPermissionsPage(); }
+        });
+        connect(btnClear, &QPushButton::clicked, this, [this]() {
+            int at=m_permUi.cboAssignType->currentIndex(); int asub=m_permUi.cboAssignSubject->currentIndex();
+            std::string st= at==0 ? Permissions::SubjectRole : Permissions::SubjectUser;
+            QString sid=m_permUi.cboAssignSubject->itemData(asub).toString();
+            if(!sid.isEmpty()){ m_db.clearTemplateAssignment(st,sid.toStdString()); refreshPermissionsPage(); }
+        });
+
+        bodyLayout->addWidget(g);
+    }
+
+    scroll->setWidget(body);
+    mainLayout->addWidget(scroll, 1);
+    if (ui->stackedWidget) ui->stackedWidget->addWidget(page);
+    return page;
+}
 
 // Show a transient status-bar message (and always log it).
 void MainWindow::showStatus(const QString& msg, int ms)
@@ -4298,6 +4676,21 @@ void MainWindow::setupHelpMenu()
         "Ask a small offline assistant questions about how to use QMark"));
     connect(m_actionAssistant, &QAction::triggered, this, [this]() { openAssistant(); });
     help->addAction(m_actionAssistant);
+}
+
+void MainWindow::setupPermissionsAccess()
+{
+    if (!ui->menuTools) return;
+    m_actionPermissions = new QAction(Tr::trS("Permissions…"), this);
+    m_actionPermissions->setToolTip(Tr::trS(
+        "Manage feature permissions, templates and grants for roles or users"));
+    connect(m_actionPermissions, &QAction::triggered, this, [this]() {
+        if (!checkRoleRequired(BusinessLogic::RequiredRole::SuperAdmin)) return;
+        refreshPermissionsPage();
+        if (m_permissionsPage && ui->stackedWidget)
+            goToPage(ui->stackedWidget->indexOf(m_permissionsPage));
+    });
+    ui->menuTools->addAction(m_actionPermissions);
 }
 
 void MainWindow::openAssistant()

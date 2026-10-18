@@ -216,6 +216,7 @@ QMARK_SRCS=(
     main.cpp
     mainwindow.cpp
     netutil.cpp
+    permissions.cpp
     remoteserver.cpp
     sanitize_string.cpp
     scannerdetect.cpp

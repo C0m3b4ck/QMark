@@ -1251,6 +1251,217 @@ std::vector<Domain::User> SQLiteDataAccess::getAllUsers()
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Permission templates, assignments and grants
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+// Feature keys never contain a comma, so a comma-separated list is a
+// compact and safe serialisation for a template's feature bundle.
+std::string joinFeatures(const std::vector<std::string>& features)
+{
+    std::string out;
+    for (const auto& f : features) {
+        if (f.empty()) continue;
+        if (!out.empty()) out += ",";
+        out += f;
+    }
+    return out;
+}
+
+std::vector<std::string> splitFeatures(const std::string& text)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : text) {
+        if (c == ',') {
+            if (!cur.empty()) out.push_back(cur);
+            cur.clear();
+        } else if (c != ' ' && c != '\n' && c != '\r' && c != '\t') {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+} // namespace
+
+std::vector<Domain::PermissionTemplate> SQLiteDataAccess::getAllPermissionTemplates()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<Domain::PermissionTemplate> templates;
+    if (!m_usersDb) return templates;
+
+    SQLite::Statement query(*m_usersDb,
+        "SELECT id, name, features FROM permission_templates ORDER BY name");
+    while (query.executeStep()) {
+        Domain::PermissionTemplate tpl;
+        tpl.id = query.getColumn(0).getText();
+        tpl.name = query.getColumn(1).getText();
+        tpl.features = splitFeatures(query.getColumn(2).getText());
+        templates.push_back(std::move(tpl));
+    }
+    return templates;
+}
+
+bool SQLiteDataAccess::savePermissionTemplate(const Domain::PermissionTemplate& tpl)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_usersDb || tpl.id.empty() || tpl.name.empty()) return false;
+    try {
+        SQLite::Statement query(*m_usersDb,
+            "INSERT INTO permission_templates (id, name, features) VALUES (?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET name = excluded.name, features = excluded.features");
+        query.bind(1, tpl.id);
+        query.bind(2, tpl.name);
+        query.bind(3, joinFeatures(tpl.features));
+        query.exec();
+        return true;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool SQLiteDataAccess::removePermissionTemplate(const std::string& id)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_usersDb || id.empty()) return false;
+    try {
+        // Drop any assignments that point at this template first so no
+        // subject is left referencing a template that no longer exists.
+        SQLite::Statement unassign(*m_usersDb,
+            "DELETE FROM template_assignments WHERE template_id = ?");
+        unassign.bind(1, id);
+        unassign.exec();
+
+        SQLite::Statement query(*m_usersDb,
+            "DELETE FROM permission_templates WHERE id = ?");
+        query.bind(1, id);
+        return query.exec() > 0;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
+std::vector<Domain::TemplateAssignment> SQLiteDataAccess::getAllTemplateAssignments()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<Domain::TemplateAssignment> assignments;
+    if (!m_usersDb) return assignments;
+
+    SQLite::Statement query(*m_usersDb,
+        "SELECT subject_type, subject_id, template_id FROM template_assignments");
+    while (query.executeStep()) {
+        Domain::TemplateAssignment a;
+        a.subjectType = query.getColumn(0).getText();
+        a.subjectId = query.getColumn(1).getText();
+        a.templateId = query.getColumn(2).getText();
+        assignments.push_back(std::move(a));
+    }
+    return assignments;
+}
+
+bool SQLiteDataAccess::setTemplateAssignment(const std::string& subjectType,
+                                             const std::string& subjectId,
+                                             const std::string& templateId)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_usersDb || subjectType.empty() || subjectId.empty() || templateId.empty()) return false;
+    try {
+        SQLite::Statement query(*m_usersDb,
+            "INSERT INTO template_assignments (subject_type, subject_id, template_id) VALUES (?, ?, ?) "
+            "ON CONFLICT(subject_type, subject_id) DO UPDATE SET template_id = excluded.template_id");
+        query.bind(1, subjectType);
+        query.bind(2, subjectId);
+        query.bind(3, templateId);
+        query.exec();
+        return true;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool SQLiteDataAccess::clearTemplateAssignment(const std::string& subjectType,
+                                               const std::string& subjectId)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_usersDb || subjectType.empty() || subjectId.empty()) return false;
+    try {
+        SQLite::Statement query(*m_usersDb,
+            "DELETE FROM template_assignments WHERE subject_type = ? AND subject_id = ?");
+        query.bind(1, subjectType);
+        query.bind(2, subjectId);
+        query.exec();
+        return true;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
+std::vector<Domain::FeatureGrant> SQLiteDataAccess::getAllFeatureGrants()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<Domain::FeatureGrant> grants;
+    if (!m_usersDb) return grants;
+
+    SQLite::Statement query(*m_usersDb,
+        "SELECT subject_type, subject_id, feature, enabled FROM feature_grants");
+    while (query.executeStep()) {
+        Domain::FeatureGrant g;
+        g.subjectType = query.getColumn(0).getText();
+        g.subjectId = query.getColumn(1).getText();
+        g.feature = query.getColumn(2).getText();
+        g.enabled = query.getColumn(3).getInt() != 0;
+        grants.push_back(std::move(g));
+    }
+    return grants;
+}
+
+bool SQLiteDataAccess::setFeatureGrant(const Domain::FeatureGrant& grant)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_usersDb || grant.subjectType.empty() || grant.subjectId.empty() || grant.feature.empty())
+        return false;
+    try {
+        SQLite::Statement query(*m_usersDb,
+            "INSERT INTO feature_grants (subject_type, subject_id, feature, enabled) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(subject_type, subject_id, feature) DO UPDATE SET enabled = excluded.enabled");
+        query.bind(1, grant.subjectType);
+        query.bind(2, grant.subjectId);
+        query.bind(3, grant.feature);
+        query.bind(4, grant.enabled ? 1 : 0);
+        query.exec();
+        return true;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool SQLiteDataAccess::clearFeatureGrant(const std::string& subjectType,
+                                         const std::string& subjectId,
+                                         const std::string& feature)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_usersDb || subjectType.empty() || subjectId.empty() || feature.empty()) return false;
+    try {
+        SQLite::Statement query(*m_usersDb,
+            "DELETE FROM feature_grants WHERE subject_type = ? AND subject_id = ? AND feature = ?");
+        query.bind(1, subjectType);
+        query.bind(2, subjectId);
+        query.bind(3, feature);
+        query.exec();
+        return true;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // ID checking
 // ═══════════════════════════════════════════════════════════════════
 

@@ -12,6 +12,7 @@
 #include "domain.h"
 #include "businesslogic.h"
 #include "dataaccess.h"
+#include "permissions.h"
 #include "worklog.h"
 
 class QTimer;
@@ -26,6 +27,8 @@ class QMenu;
 class QAction;
 class QToolBar;
 class QToolButton;
+class QPushButton;
+class QTableWidget;
 class RemoteServer;
 
 QT_BEGIN_NAMESPACE
@@ -384,6 +387,37 @@ private:
     void setupHelpMenu();
     void openAssistant();
     QAction* m_actionAssistant = nullptr;
+
+    // ── Feature permissions (SuperAdmin) ───────────────────────────
+    // A SuperAdmin can enable/disable individual features for a whole
+    // role or for a single user, either directly or through a named
+    // template. checkFeature() is the gate used across the app.
+    void setupPermissionsAccess();
+    QWidget* buildPermissionsPage();
+    void refreshPermissionsPage();
+    bool checkFeature(Permissions::Feature feature);
+    QAction* m_actionPermissions = nullptr;
+    QWidget* m_permissionsPage = nullptr;
+    struct PermissionsUi {
+        // Effective permissions for a subject
+        QComboBox*    cboSubjectType = nullptr;   // Whole role | Specific user
+        QComboBox*    cboSubject = nullptr;
+        QTableWidget* tblFeatures = nullptr;
+        QLabel*       lblSubjectInfo = nullptr;
+        // Templates
+        QComboBox*    cboTemplate = nullptr;
+        QLineEdit*    txtTemplateName = nullptr;
+        std::vector<QCheckBox*> chkTemplateFeatures;
+        QPushButton*  btnTemplateSave = nullptr;
+        QPushButton*  btnTemplateDelete = nullptr;
+        // Assign a template
+        QComboBox*    cboAssignType = nullptr;
+        QComboBox*    cboAssignSubject = nullptr;
+        QComboBox*    cboAssignTemplate = nullptr;
+        QLabel*       lblAssignInfo = nullptr;
+    };
+    PermissionsUi m_permUi;
+    bool m_applyingPermissionsUi = false;
 };
 
 #endif // MAINWINDOW_H
